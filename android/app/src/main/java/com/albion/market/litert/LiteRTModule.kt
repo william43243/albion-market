@@ -350,7 +350,32 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
                     samplerConfig = SamplerConfig(topK = 20, topP = 0.9, temperature = 0.3),
                     tools = toolList,
                 )
-                conversation = newEngine!!.createConversation(convConfig)
+                try {
+                    conversation = newEngine!!.createConversation(convConfig)
+                } catch (visionError: Exception) {
+                    if (!hasVision) throw visionError
+                    // Some multimodal packages omit TF_LITE_VISION_ENCODER even
+                    // though their registry metadata advertises vision. Retry as
+                    // text-only so the market advisor remains usable.
+                    Log.w(TAG, "Vision conversation unavailable; retrying text-only: ${visionError.message}")
+                    newEngine!!.close()
+                    val fallbackBackend = gpuBackend ?: Backend.CPU()
+                    val fallbackConfig = EngineConfig(
+                        modelPath = modelFile.absolutePath,
+                        backend = fallbackBackend,
+                        cacheDir = reactContext.cacheDir.path
+                    )
+                    val fallbackEngine = Engine(fallbackConfig).also { it.initialize() }
+                    newEngine = fallbackEngine
+                    engine = fallbackEngine
+                    hasVision = false
+                    val textOnlyConfig = ConversationConfig(
+                        systemInstruction = Contents.of(systemPrompt),
+                        samplerConfig = SamplerConfig(topK = 20, topP = 0.9, temperature = 0.3),
+                        tools = emptyList(),
+                    )
+                    conversation = fallbackEngine.createConversation(textOnlyConfig)
+                }
 
                 promise.resolve(Arguments.createMap().apply {
                     putBoolean("success", true)
