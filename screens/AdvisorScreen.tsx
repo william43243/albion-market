@@ -129,11 +129,10 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
       streamGenerationRef.current += 1;
       downloadGenerationRef.current += 1;
       const stop = cleanupRef.current;
-      const cancel = cancelDownloadRef.current;
+      // DownloadManager owns model transfers; screen lifecycle must not cancel them.
       cleanupRef.current = null;
       cancelDownloadRef.current = null;
       stop?.();
-      cancel?.();
     };
   }, [isActive, server, lang]);
 
