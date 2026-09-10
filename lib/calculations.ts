@@ -1,38 +1,30 @@
-// Albion Online marketplace and crafting formulas.
-// Marketplace rates: setup/order fee 2.5%; sales tax 4% Premium / 8% otherwise.
+// Albion Online Tax & Fee Calculator - Core Formulas
+// Sources: wiki.albiononline.com/wiki/Marketplace, wiki.albiononline.com/wiki/Margin
 
+/**
+ * Defensive input sanitizer: coerces any value into a finite number >= 0.
+ * Guards against NaN / Infinity / negative inputs that would otherwise
+ * propagate into the UI as "NaN" or "-∞".
+ */
 function sanitizeAmount(value: number): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 0;
+  return value;
 }
 
+/** Sanitizes a quantity into a finite, non-negative integer. */
 function sanitizeQuantity(value: number): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
-    ? Math.floor(value)
-    : 0;
-}
-
-function clampRate(value: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
-  return Math.min(1, Math.max(0, value));
-}
-
-/** Round a fee once on the full order amount, never once per unit. */
-function orderFee(unitPrice: number, quantity: number, rate: number): number {
-  const total = sanitizeAmount(unitPrice) * sanitizeAmount(quantity);
-  return total > 0 ? Math.ceil(total * rate) : 0;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 0;
+  return Math.floor(value);
 }
 
 export interface MarketplaceResult {
   buyPrice: number;
   sellPrice: number;
   quantity: number;
-  useBuyOrder: boolean;
-  useSellOrder: boolean;
   setupFeeBuy: number;
   setupFeeSell: number;
   salesTax: number;
   totalFees: number;
-  upfrontInvestment: number;
   netProfit: number;
   profitPerItem: number;
   feePercentage: number;
@@ -89,21 +81,9 @@ export interface CraftingResult {
   totalFee: number;
 }
 
-export interface RecipeMaterial {
-  unitPrice: number;
-  requiredQuantity: number;
-  useBuyOrder: boolean;
-}
-
 export interface FlippingResult {
   marketplace: MarketplaceResult;
   crafting: CraftingResult;
-  materials: RecipeMaterial[];
-  resourceReturnRate: number;
-  grossMaterialCost: number;
-  returnedMaterialValue: number;
-  materialCost: number;
-  buyOrderFees: number;
   totalProfit: number;
   totalFees: number;
   upfrontInvestment: number;
@@ -137,19 +117,16 @@ export function calculateMarketplaceProfit(
   const netProfit = totalRevenue - setupFeeSell - salesTax - totalCost - setupFeeBuy;
   const profitPerItem = quantity > 0 ? netProfit / quantity : 0;
   const feePercentage = totalRevenue > 0 ? (totalFees / totalRevenue) * 100 : 0;
-  const marginPercentage = upfrontInvestment > 0 ? (netProfit / upfrontInvestment) * 100 : 0;
+  const marginPercentage = totalCost > 0 ? (netProfit / totalCost) * 100 : 0;
 
   return {
     buyPrice,
     sellPrice,
     quantity,
-    useBuyOrder,
-    useSellOrder,
     setupFeeBuy,
     setupFeeSell,
     salesTax,
     totalFees,
-    upfrontInvestment,
     netProfit,
     profitPerItem,
     feePercentage,
@@ -171,11 +148,19 @@ export function calculateCraftingFee(
   quantity = sanitizeQuantity(quantity);
 
   const nutritionPerItem = itemValue * 0.1125;
-  const feePerItem = (nutritionPerItem * stationTax) / 100;
+  const feePerItem = (itemValue * 0.1125 * stationTax) / 100;
   const totalNutrition = nutritionPerItem * quantity;
-  const totalFee = feePerItem > 0 && quantity > 0 ? Math.ceil(feePerItem * quantity) : 0;
+  const totalFee = Math.ceil(feePerItem * quantity);
 
-  return { itemValue, stationTax, quantity, nutritionPerItem, totalNutrition, feePerItem, totalFee };
+  return {
+    itemValue,
+    stationTax,
+    quantity,
+    nutritionPerItem,
+    totalNutrition,
+    feePerItem,
+    totalFee,
+  };
 }
 
 /**
@@ -184,7 +169,7 @@ export function calculateCraftingFee(
  * buy-order fee when selected, and station fee.
  */
 export function calculateFlippingProfit(
-  materials: RecipeMaterial[],
+  materialBuyPrice: number,
   productSellPrice: number,
   craftingItemValue: number,
   stationTax: number,
@@ -194,7 +179,7 @@ export function calculateFlippingProfit(
   useSellOrder: boolean
 ): FlippingResult {
   const marketplace = calculateMarketplaceProfit(
-    effectiveBuyPrice,
+    materialBuyPrice,
     productSellPrice,
     quantity,
     isPremium,
@@ -212,12 +197,6 @@ export function calculateFlippingProfit(
   return {
     marketplace,
     crafting,
-    materials: cleanMaterials,
-    resourceReturnRate,
-    grossMaterialCost,
-    returnedMaterialValue,
-    materialCost,
-    buyOrderFees,
     totalProfit,
     totalFees,
     upfrontInvestment,

@@ -15,23 +15,8 @@ interface Props {
   onPremiumChange: (value: boolean) => void;
 }
 
-interface MaterialState {
-  id: number;
-  unitPrice: string;
-  requiredQuantity: string;
-  useBuyOrder: boolean;
-}
-
-const initialMaterial = (id: number): MaterialState => ({
-  id,
-  unitPrice: '',
-  requiredQuantity: '1',
-  useBuyOrder: false,
-});
-
 export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: Props) {
-  const [materials, setMaterials] = useState<MaterialState[]>([initialMaterial(1)]);
-  const [nextMaterialId, setNextMaterialId] = useState(2);
+  const [materialBuyPrice, setMaterialBuyPrice] = useState('');
   const [productSellPrice, setProductSellPrice] = useState('');
   const [craftingItemValue, setCraftingItemValue] = useState('');
   const [stationTax, setStationTax] = useState('');
@@ -39,12 +24,9 @@ export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: 
   const [useBuyOrder, setUseBuyOrder] = useState(true);
   const [useSellOrder, setUseSellOrder] = useState(true);
 
+  // Pure calculation — no side effects. Recomputes in real time on every input.
   const result = useMemo(() => {
-    const recipe: RecipeMaterial[] = materials.map((material) => ({
-      unitPrice: parseFloat(material.unitPrice) || 0,
-      requiredQuantity: parseFloat(material.requiredQuantity) || 0,
-      useBuyOrder: material.useBuyOrder,
-    }));
+    const matBuy = parseFloat(materialBuyPrice) || 0;
     const prodSell = parseFloat(productSellPrice) || 0;
     const craftIV = parseFloat(craftingItemValue) || 0;
     const tax = parseFloat(stationTax) || 0;
@@ -54,6 +36,9 @@ export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: 
   }, [materialBuyPrice, productSellPrice, craftingItemValue, stationTax, quantity, isPremium, useBuyOrder, useSellOrder]);
 
   const trackedFirstValidRef = useRef(false);
+
+  // Track one completed calculation per valid scenario entry, not every
+  // keystroke/recalculation while the user is still typing.
   useEffect(() => {
     if (!result) {
       trackedFirstValidRef.current = false;
@@ -67,22 +52,14 @@ export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: 
     return () => clearTimeout(id);
   }, [result]);
 
-  const copy = {
-    materials: lang === 'fr' ? '1. Recette et achat des matériaux' : lang === 'es' ? '1. Receta y compra de materiales' : '1. Recipe and material purchases',
-    ingredient: lang === 'fr' ? 'Ingrédient' : lang === 'es' ? 'Ingrediente' : 'Ingredient',
-    required: lang === 'fr' ? 'Quantité requise par craft' : lang === 'es' ? 'Cantidad por craft' : 'Required per craft',
-
-    add: lang === 'fr' ? '+ Ajouter un ingrédient' : lang === 'es' ? '+ Añadir ingrediente' : '+ Add ingredient',
-    remove: lang === 'fr' ? 'Retirer' : lang === 'es' ? 'Quitar' : 'Remove',
-    returnRate: lang === 'fr' ? 'Retour de ressources (%)' : lang === 'es' ? 'Retorno de recursos (%)' : 'Resource return (%)',
-    returnInfo: lang === 'fr' ? 'Paramètre explicite, indépendant de Premium' : lang === 'es' ? 'Parámetro explícito, independiente de Premium' : 'Explicit parameter, independent from Premium',
-
-  };
-
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>{t('flipping')}</Text>
-      <View style={styles.infoBox}><Text style={styles.infoText}>{t('flippingInfo')}</Text></View>
+
+      <View style={styles.infoBox}>
+        <Text style={styles.infoText}>{t('flippingInfo')}</Text>
+      </View>
+
       <PremiumToggle
         isPremium={isPremium}
         onToggle={onPremiumChange}
@@ -106,74 +83,50 @@ export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: 
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{copy.materials}</Text>
-        {materials.map((material, index) => (
-          <View key={material.id} style={styles.materialCard}>
-            <View style={styles.materialHeader}>
-              <Text style={styles.materialTitle}>{copy.ingredient} {index + 1}</Text>
-              {materials.length > 1 && (
-                <TouchableOpacity onPress={() => removeMaterial(material.id)}>
-                  <Text style={styles.removeText}>{copy.remove}</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-            <NumberInput
-              label={t('materialCost')}
-              value={material.unitPrice}
-              onChangeText={(value) => updateMaterial(material.id, { unitPrice: value })}
-              info={lang === 'fr' ? 'Prix unitaire' : 'Unit price'}
-            />
-            <NumberInput
-              label={copy.required}
-              value={material.requiredQuantity}
-              onChangeText={(value) => updateMaterial(material.id, { requiredQuantity: value })}
-            />
-            <TouchableOpacity
-              style={[styles.orderBtn, material.useBuyOrder && styles.orderBtnActive]}
-              onPress={() => updateMaterial(material.id, { useBuyOrder: !material.useBuyOrder })}
-            >
-              <Text style={[styles.orderBtnText, material.useBuyOrder && styles.orderBtnTextActive]}>
-                {t('useBuyOrder')}: {material.useBuyOrder ? 'ON' : 'OFF'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        ))}
-        <TouchableOpacity style={styles.addBtn} onPress={addMaterial} disabled={materials.length >= 8}>
-          <Text style={styles.addBtnText}>{copy.add}</Text>
-        </TouchableOpacity>
+        <Text style={styles.sectionTitle}>
+          {lang === 'fr' ? '1. Achat Matériaux' : '1. Buy Materials'}
+        </Text>
         <NumberInput
-          label={copy.returnRate}
-          value={resourceReturnPercent}
-          onChangeText={setResourceReturnPercent}
-          info={copy.returnInfo}
+          label={t('materialCost')}
+          value={materialBuyPrice}
+          onChangeText={setMaterialBuyPrice}
+          info={lang === 'fr' ? 'Prix unitaire des matériaux' : 'Unit price of materials'}
         />
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{lang === 'fr' ? '2. Craft' : '2. Craft'}</Text>
+        <Text style={styles.sectionTitle}>
+          {lang === 'fr' ? '2. Craft' : '2. Craft'}
+        </Text>
         <NumberInput
           label={t('itemValue')}
           value={craftingItemValue}
           onChangeText={setCraftingItemValue}
-          info={lang === 'fr' ? "Item Value du produit crafté" : 'Item Value of crafted product'}
+          info={lang === 'fr' ? "Item Value du produit crafté" : "Item Value of crafted product"}
         />
-        <NumberInput label={t('stationTax')} value={stationTax} onChangeText={setStationTax} />
+        <NumberInput
+          label={t('stationTax')}
+          value={stationTax}
+          onChangeText={setStationTax}
+        />
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{lang === 'fr' ? '3. Vente du produit fini' : '3. Sell finished product'}</Text>
-        <NumberInput label={t('productPrice')} value={productSellPrice} onChangeText={setProductSellPrice} />
-        <TouchableOpacity
-          style={[styles.orderBtn, useSellOrder && styles.orderBtnActive]}
-          onPress={() => setUseSellOrder((value) => !value)}
-        >
-          <Text style={[styles.orderBtnText, useSellOrder && styles.orderBtnTextActive]}>
-            {t('useSellOrder')}: {useSellOrder ? 'ON' : 'OFF'}
-          </Text>
-        </TouchableOpacity>
+        <Text style={styles.sectionTitle}>
+          {lang === 'fr' ? '3. Vente Produit Fini' : '3. Sell Product'}
+        </Text>
+        <NumberInput
+          label={t('productPrice')}
+          value={productSellPrice}
+          onChangeText={setProductSellPrice}
+        />
       </View>
 
-      <NumberInput label={t('quantity')} value={quantity} onChangeText={setQuantity} />
+      <NumberInput
+        label={t('quantity')}
+        value={quantity}
+        onChangeText={setQuantity}
+      />
 
       {result && (
         <>

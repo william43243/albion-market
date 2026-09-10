@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Platform,
   Alert,
+  AppState,
 } from 'react-native';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS } from '../constants/theme';
 import { Language } from '../lib/i18n';
@@ -25,7 +26,6 @@ import {
 } from '../lib/advisor';
 import { SERVERS } from '../lib/api';
 import * as LLM from '../lib/llm';
-import { useScreenActive } from '../hooks/useScreenLifecycle';
 import * as ImagePicker from 'expo-image-picker';
 import { AVAILABLE_MODELS, ModelInfo, formatBytes, getModelsForPlatform, getModelFilename, getModelSizeLabel } from '../lib/models';
 import { trackAIPrompt, trackAIModelDownload, trackAIModelStart, trackAIImageSent } from '../lib/analytics';
@@ -94,7 +94,7 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
 
   const resetNativeConversation = useCallback(async (): Promise<boolean> => {
     if (resetInFlightRef.current) return resetInFlightRef.current;
-    const pending = LLM.resetConversation(buildSystemPrompt(lang, server))
+    const pending = LLM.resetConversation(buildSystemPrompt(lang, server), SERVERS[server])
       .finally(() => { resetInFlightRef.current = null; });
     resetInFlightRef.current = pending;
     return pending;
@@ -102,52 +102,28 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
 
   // Load downloaded models on mount + refresh when app comes back to foreground
   useEffect(() => {
-    lifecycleRef.current.active = isActive;
-    setEngineState(prev => prev === 'loading' ? 'idle' : prev);
-    setFetchingData(false);
-    setStreaming(false);
-    setStreamBuffer('');
-    setDownloading(null);
-    if (isActive) {
-      const generation = lifecycleRef.current.generation;
-      void refreshDownloadedModels();
-      void refreshFreeDisk(generation);
-      if (isWeb) {
-        LLM.isWebGPUAvailable().then(value => {
-          if (isCurrent(generation)) setWebGPUSupported(value);
-        }).catch(() => {});
-      }
+    refreshDownloadedModels();
+    LLM.getFreeDiskSpace().then(setFreeDisk);
+
+    // Check WebGPU on web
+    if (Platform.OS === 'web') {
+      LLM.isWebGPUAvailable().then(setWebGPUSupported);
     }
-    return () => {
-      lifecycleRef.current.generation += 1;
-      lifecycleRef.current.active = false;
-      marketAbortRef.current?.abort();
-      marketAbortRef.current = null;
-      streamGenerationRef.current += 1;
-      downloadGenerationRef.current += 1;
-      const stop = cleanupRef.current;
-      // DownloadManager owns model transfers; screen lifecycle must not cancel them.
-      cleanupRef.current = null;
-      cancelDownloadRef.current = null;
-      stop?.();
-    };
-  }, [isActive, server, lang]);
+
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        refreshDownloadedModels();
+        LLM.getFreeDiskSpace().then(setFreeDisk);
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true });
   }, [messages, streamBuffer]);
 
-  const refreshFreeDisk = async (generation = lifecycleRef.current.generation) => {
-    if (!isCurrent(generation)) return;
-    try {
-      const value = await LLM.getFreeDiskSpace();
-      if (isCurrent(generation)) setFreeDisk(value);
-    } catch {}
-  };
-
-  const refreshDownloadedModels = async (generation = lifecycleRef.current.generation) => {
-    if (!isCurrent(generation)) return;
-    try {
+  const refreshDownloadedModels = async () => {
     if (isWeb) {
       // On web, check each model individually via WebLLM cache
       const platformMods = getModelsForPlatform('web');
@@ -155,26 +131,21 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
       for (const m of platformMods) {
         const webId = getModelFilename(m, 'web');
         const inCache = await LLM.isModelDownloaded(webId);
-        if (!isCurrent(generation)) return;
         if (inCache) cached.add(webId);
       }
       setDownloadedFilenames(cached);
     } else {
       const models = await LLM.getDownloadedModels();
       const filenames = new Set(models.map((m) => m.filename || m.id));
-      if (isCurrent(generation)) setDownloadedFilenames(filenames);
+      setDownloadedFilenames(filenames);
     }
-    } catch {}
   };
 
   // ─── Model Download ──────────────────────────────────────────
 
   const handleDownload = useCallback(
     (model: ModelInfo) => {
-      if (!lifecycleRef.current.active || downloading || cancelDownloadRef.current) return;
-      const generation = lifecycleRef.current.generation;
-      const request = ++downloadGenerationRef.current;
-      const current = () => isCurrent(generation) && request === downloadGenerationRef.current;
+      if (downloading) return;
 
       // Check disk space
       if (freeDisk > 0 && model.sizeBytes > freeDisk * 0.9) {
@@ -197,7 +168,6 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
           dlFilename,
           {
             onProgress: (bytesDownloaded, totalBytes, percent) => {
-              if (!current()) return;
               setDownloading((prev) =>
                 prev ? { ...prev, bytesDownloaded, totalBytes, percent } : null
               );
@@ -209,17 +179,13 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
 
         promise
           .then(() => {
-            if (!current()) return;
-            downloadGenerationRef.current += 1;
             setDownloading(null);
             cancelDownloadRef.current = null;
             refreshDownloadedModels();
-            void refreshFreeDisk();
+            LLM.getFreeDiskSpace().then(setFreeDisk);
             trackAIModelDownload(model.id);
           })
           .catch((err: any) => {
-            if (!current()) return;
-            downloadGenerationRef.current += 1;
             setDownloading(null);
             cancelDownloadRef.current = null;
             const msg = err?.message || String(err) || 'Unknown error';
@@ -228,8 +194,6 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
             }
           });
       } catch (err: any) {
-        if (!current()) return;
-        downloadGenerationRef.current += 1;
         setDownloading(null);
         Alert.alert(t('error'), err?.message || String(err));
       }
@@ -244,8 +208,6 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
 
   const handleDeleteModel = useCallback(
     async (model: ModelInfo) => {
-      if (!lifecycleRef.current.active) return;
-      const generation = lifecycleRef.current.generation;
       Alert.alert(
         lang === 'fr' ? 'Supprimer le modèle ?' : 'Delete model?',
         model.name,
@@ -255,41 +217,27 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
             text: lang === 'fr' ? 'Supprimer' : 'Delete',
             style: 'destructive',
             onPress: async () => {
-              if (!isCurrent(generation) || initializingRef.current) return;
-              try {
               if (activeModelId === model.id) {
-                marketRequestGenerationRef.current += 1;
-                stopStream();
                 await LLM.destroy();
-                if (!isCurrent(generation)) return;
                 setEngineState('idle');
                 setActiveModelId(null);
                 setScreen('models');
               }
               await LLM.deleteModel(getModelFilename(model, Platform.OS));
-              if (!isCurrent(generation)) return;
-              void refreshDownloadedModels(generation);
-              void refreshFreeDisk(generation);
-              } catch (error: any) {
-                if (isCurrent(generation)) Alert.alert(t('error'), error?.message || String(error));
-              }
+              refreshDownloadedModels();
+              LLM.getFreeDiskSpace().then(setFreeDisk);
             },
           },
         ]
       );
     },
-    [activeModelId, lang, t]
+    [activeModelId, lang]
   );
 
   // ─── Engine Init ─────────────────────────────────────────────
 
   const handleStartModel = useCallback(
     async (model: ModelInfo) => {
-      if (!lifecycleRef.current.active || initializingRef.current) return;
-      const generation = lifecycleRef.current.generation;
-      initializingRef.current = true;
-      marketRequestGenerationRef.current += 1;
-      stopStream();
       setEngineState('loading');
       setActiveModelId(model.id);
       try {
@@ -312,26 +260,13 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
         setScreen('chat');
         trackAIModelStart(model.id);
       } catch (e: any) {
-        if (!isCurrent(generation)) return;
         setEngineState('error');
         setActiveModelId(null);
         Alert.alert(t('error'), e.message);
-      } finally {
-        initializingRef.current = false;
       }
     },
     [lang, server, t]
   );
-
-  // Invalidate before detaching: native promises can still report errors later.
-  const stopStream = () => {
-    streamGenerationRef.current += 1;
-    const stop = cleanupRef.current;
-    cleanupRef.current = null;
-    stop?.();
-    setStreaming(false);
-    setStreamBuffer('');
-  };
 
   // ─── Chat Logic ──────────────────────────────────────────────
 
@@ -353,15 +288,12 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
 
       trackAIPrompt(activeModelId || 'unknown');
 
-      const cleanup = LLM.sendMessage(prompt, {
+      cleanupRef.current = LLM.sendMessage(prompt, {
         onToken: (token) => {
-          if (!current()) return;
           fullResponse += token;
           setStreamBuffer(fullResponse);
         },
         onDone: () => {
-          if (!current()) return;
-          streamGenerationRef.current += 1;
           const responseTokens = estimateTokens(fullResponse);
           const newTotal = tokenCount + promptTokens + responseTokens;
           setTokenCount(newTotal);
@@ -399,8 +331,6 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
           cleanupRef.current = null;
         },
         onError: (error) => {
-          if (!current()) return;
-          streamGenerationRef.current += 1;
           setMessages((prev) => [
             ...prev,
             { role: 'assistant', content: `Error: ${error}` },
@@ -410,8 +340,6 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
           cleanupRef.current = null;
         },
       });
-      if (current()) cleanupRef.current = cleanup;
-      else cleanup();
     },
     [streaming, tokenCount, lang, server, activeModelId, resetNativeConversation]
   );
@@ -422,17 +350,16 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
       setFetchingData(true);
 
       try {
-        const ctx = await fetchMarketContext(item, server, abort.signal);
-        if (!current()) return;
+        const ctx = await fetchMarketContext(item, server);
         setMarketCtx(ctx);
         if (engineState === 'ready') {
           const prompt = buildAnalysisPrompt(ctx, lang, isPremium, analysisCity);
           sendToLLM(prompt, `${t('advisorAnalyzing')} ${item.n}...`);
         }
       } catch (e: any) {
-        if (current()) Alert.alert(t('error'), e.message);
+        Alert.alert(t('error'), e.message);
       }
-      if (current()) setFetchingData(false);
+      setFetchingData(false);
     },
     [server, engineState, lang, t, isPremium, playerCity, sendToLLM]
   );
@@ -484,15 +411,12 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
 
       trackAIImageSent(activeModelId || 'unknown');
 
-      const cleanup = LLM.sendMessageWithImage(prompt, imagePath, {
+      cleanupRef.current = LLM.sendMessageWithImage(prompt, imagePath, {
         onToken: (token) => {
-          if (!current()) return;
           fullResponse += token;
           setStreamBuffer(fullResponse);
         },
         onDone: () => {
-          if (!current()) return;
-          streamGenerationRef.current += 1;
           const responseTokens = estimateTokens(fullResponse);
           const newTotal = tokenCount + promptTokens + responseTokens;
           setTokenCount(newTotal);
@@ -518,8 +442,6 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
           cleanupRef.current = null;
         },
         onError: (error) => {
-          if (!current()) return;
-          streamGenerationRef.current += 1;
           setMessages((prev) => [
             ...prev,
             { role: 'assistant', content: `Error: ${error}` },
@@ -529,17 +451,12 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
           cleanupRef.current = null;
         },
       });
-      if (current()) cleanupRef.current = cleanup;
-      else cleanup();
     },
     [streaming, input, tokenCount, lang, server, activeModelId]
   );
 
   const handlePickImage = useCallback(async () => {
-    if (!lifecycleRef.current.active || streaming || engineState !== 'ready') return;
-    const generation = lifecycleRef.current.generation;
-    const request = streamGenerationRef.current;
-    const current = () => isCurrent(generation) && request === streamGenerationRef.current;
+    if (streaming || engineState !== 'ready') return;
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
@@ -547,18 +464,14 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
       allowsEditing: false,
     });
 
-    if (!current() || result.canceled || !result.assets?.[0]) return;
+    if (result.canceled || !result.assets?.[0]) return;
     sendImageToLLM(result.assets[0].uri);
   }, [streaming, engineState, sendImageToLLM]);
 
   const handleTakePhoto = useCallback(async () => {
-    if (!lifecycleRef.current.active || streaming || engineState !== 'ready') return;
-    const generation = lifecycleRef.current.generation;
-    const request = streamGenerationRef.current;
-    const current = () => isCurrent(generation) && request === streamGenerationRef.current;
+    if (streaming || engineState !== 'ready') return;
 
     const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!current()) return;
     if (!perm.granted) {
       Alert.alert(t('error'), lang === 'fr' ? 'Permission caméra refusée' : 'Camera permission denied');
       return;
@@ -569,15 +482,12 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
       allowsEditing: false,
     });
 
-    if (!current() || result.canceled || !result.assets?.[0]) return;
+    if (result.canceled || !result.assets?.[0]) return;
     sendImageToLLM(result.assets[0].uri);
-  }, [streaming, engineState, sendImageToLLM, lang, t]);
+  }, [streaming, engineState]);
 
   const handleReset = useCallback(async () => {
-    if (!lifecycleRef.current.active) return;
-    marketRequestGenerationRef.current += 1;
-    stopStream();
-    setFetchingData(false);
+    cleanupRef.current?.();
     setStreaming(false);
     setStreamBuffer('');
     setMessages([]);
@@ -590,21 +500,11 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
   }, [resetNativeConversation]);
 
   useEffect(() => {
-    if (previousServerRef.current === server) return;
-    marketRequestGenerationRef.current += 1;
-    stopStream();
-    setFetchingData(false);
-    setMarketCtx(null);
-    setSelectedItem(null);
-    if (engineState === 'loading') setEngineState('idle');
-    if (!isActive || engineState !== 'ready') return;
+    if (engineState !== 'ready' || previousServerRef.current === server) return;
     previousServerRef.current = server;
-    marketRequestGenerationRef.current += 1;
-    stopStream();
+    cleanupRef.current?.();
     setStreaming(false);
     setStreamBuffer('');
-    setMarketCtx(null);
-    setSelectedItem(null);
     setTokenCount(SYSTEM_PROMPT_TOKENS);
     void resetNativeConversation();
     setMessages((prev) => [
@@ -619,22 +519,13 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
   }, [server, lang, engineState, resetNativeConversation]);
 
   const handleBackToModels = useCallback(async () => {
-    if (!lifecycleRef.current.active) return;
-    const generation = lifecycleRef.current.generation;
-    marketRequestGenerationRef.current += 1;
-    stopStream();
-    setFetchingData(false);
+    cleanupRef.current?.();
     setStreaming(false);
     setStreamBuffer('');
     setMessages([]);
     setMarketCtx(null);
     setSelectedItem(null);
-    try {
-      await LLM.destroy();
-    } catch {
-      if (!isCurrent(generation)) return;
-    }
-    if (!isCurrent(generation)) return;
+    await LLM.destroy();
     setEngineState('idle');
     setActiveModelId(null);
     setScreen('models');
@@ -877,9 +768,6 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
               <Text style={styles.modelTagText}>
                 {AVAILABLE_MODELS.find((m) => m.id === activeModelId)?.name || ''}
               </Text>
-            </View>
-            <View style={styles.toolsTag}>
-              <Text style={styles.toolsTagText}>🛠 5</Text>
             </View>
             <Text style={[
               styles.tokenCounter,
@@ -1286,17 +1174,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACING.sm,
-  },
-  toolsTag: {
-    backgroundColor: COLORS.profit + '20',
-    paddingHorizontal: SPACING.xs,
-    paddingVertical: 2,
-    borderRadius: BORDER_RADIUS.sm,
-  },
-  toolsTagText: {
-    color: COLORS.profit,
-    fontSize: FONT_SIZE.xs,
-    fontWeight: '700',
   },
   tokenCounter: {
     fontSize: FONT_SIZE.xs,

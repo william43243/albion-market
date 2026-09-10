@@ -15,7 +15,6 @@ import { fetchCurrentPrices, fetchCurrentPricesBatch, CITIES, City, Server, form
 import { parseUserNumber } from '../lib/numberParsing';
 import { trackMarketCalculation, trackPriceFetch } from '../lib/analytics';
 import { AlbionItem } from '../lib/items';
-import { useRequestScope } from '../hooks/useScreenLifecycle';
 import NumberInput from '../components/NumberInput';
 import PremiumToggle from '../components/PremiumToggle';
 import ResultCard from '../components/ResultCard';
@@ -84,16 +83,16 @@ export default function MarketplaceScreen({ t, lang, server, isPremium, onPremiu
         trackPriceFetch(item.id, selectedCity);
         trackMarketCalculation();
         setPriceDate({
-          buy: requestedBuyOrder ? cityPrice.buy_price_max_date : cityPrice.sell_price_min_date,
-          sell: requestedSellOrder ? cityPrice.sell_price_min_date : cityPrice.buy_price_max_date,
+          sell: cityPrice.sell_price_min_date || '',
+          buy: cityPrice.buy_price_max_date || '',
         });
       } else {
         Alert.alert(t('error'), t('noData'));
       }
     } catch (e) {
-      if (scope.current() && generation === priceRequestGenerationRef.current) Alert.alert(t('error'), String(e));
+      Alert.alert(t('error'), String(e));
     }
-    if (scope.current() && generation === priceRequestGenerationRef.current) setLoading(false);
+    setLoading(false);
   };
 
   const scanWatchlist = async () => {
@@ -173,7 +172,7 @@ export default function MarketplaceScreen({ t, lang, server, isPremium, onPremiu
               <TouchableOpacity
                 key={city}
                 style={[styles.cityChip, selectedCity === city && styles.cityChipActive]}
-                onPress={() => { priceRequestGenerationRef.current += 1; setLoading(false); setPriceDate(null); setBuyPrice(''); setSellPrice(''); setSelectedCity(city); }}
+                onPress={() => setSelectedCity(city)}
               >
                 <Text
                   style={[
@@ -253,13 +252,6 @@ export default function MarketplaceScreen({ t, lang, server, isPremium, onPremiu
                     { label: t('setupFeeSell'), value: `${result.setupFeeSell} silver` },
                   ]
                 : []),
-              ...(useSellOrder
-                ? [{ label: t('setupFeeSell'), value: `${result.setupFeeSell} silver` }]
-                : []),
-              {
-                label: t('upfrontInvestment'),
-                value: `${result.upfrontInvestment} silver`,
-              },
               { label: t('salesTax'), value: `${result.salesTax} silver` },
               {
                 label: t('fees') + ' ' + t('total'),
