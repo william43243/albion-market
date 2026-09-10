@@ -106,12 +106,13 @@ export async function initialize(
   modelFilename: string,
   systemPrompt: string,
   serverBaseUrl: string,
-  supportsVision: boolean = false
+  supportsVision: boolean = false,
+  supportsTools: boolean = false
 ): Promise<InitResult> {
   if (Platform.OS !== 'android' || !LiteRTModule) {
     throw new Error('LiteRT-LM is only available on Android');
   }
-  return LiteRTModule.initialize(modelFilename, systemPrompt, serverBaseUrl, supportsVision);
+  return LiteRTModule.initialize(modelFilename, systemPrompt, serverBaseUrl, supportsVision, supportsTools);
 }
 
 export function sendMessage(

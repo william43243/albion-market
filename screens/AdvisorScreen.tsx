@@ -302,7 +302,7 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
         const systemPrompt = buildSystemPrompt(lang, server);
         const serverUrl = SERVERS[server];
         const filename = getModelFilename(model, Platform.OS);
-        const initResult = await LLM.initialize(filename, systemPrompt, serverUrl, model.multimodal === true);
+        const initResult = await LLM.initialize(filename, systemPrompt, serverUrl, model.multimodal === true, model.toolCalling === true);
         if (!isCurrent(generation)) {
           // Native initialization is not abortable; promptly release an engine
           // that completed after this screen became inactive.
@@ -888,6 +888,9 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
                 {AVAILABLE_MODELS.find((m) => m.id === activeModelId)?.name || ''}
               </Text>
             </View>
+            <View style={styles.toolsTag}>
+              <Text style={styles.toolsTagText}>🛠 5</Text>
+            </View>
             <Text style={[
               styles.tokenCounter,
               tokenCount >= RESET_THRESHOLD ? { color: COLORS.loss } :
@@ -1293,6 +1296,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACING.sm,
+  },
+  toolsTag: {
+    backgroundColor: COLORS.profit + '20',
+    paddingHorizontal: SPACING.xs,
+    paddingVertical: 2,
+    borderRadius: BORDER_RADIUS.sm,
+  },
+  toolsTagText: {
+    color: COLORS.profit,
+    fontSize: FONT_SIZE.xs,
+    fontWeight: '700',
   },
   tokenCounter: {
     fontSize: FONT_SIZE.xs,

@@ -37,6 +37,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
     private var conversation: Conversation? = null
     private var currentModelId: String? = null
     private var currentServerBaseUrl: String? = null
+    private var currentSupportsTools: Boolean = false
     private var hasVision = false
     private val conversationLock = Any()
     @Volatile private var activeInferenceRequestId: String? = null
@@ -243,6 +244,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
         systemPrompt: String,
         serverBaseUrl: String,
         supportsVision: Boolean,
+        supportsTools: Boolean,
         promise: Promise,
     ) {
         scope.launch {
@@ -338,12 +340,13 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
                 // tool providers are attached to text-only model conversations.
                 // Market context is already fetched and injected by JS, so keep
                 // tools for the explicitly multimodal path only.
-                val toolList = if (supportsVision) {
+                val toolList = if (supportsTools) {
                     AlbionTools(serverBaseUrl, reactContext).allTools().map { tool(it) }
                 } else {
                     emptyList()
                 }
                 currentServerBaseUrl = serverBaseUrl
+                currentSupportsTools = supportsTools
 
                 val convConfig = ConversationConfig(
                     systemInstruction = Contents.of(systemPrompt),
@@ -462,7 +465,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
         scope.launch {
             try {
                 conversation?.close()
-                val toolList = if (hasVision) {
+                val toolList = if (currentSupportsTools) {
                     AlbionTools(serverBaseUrl, reactContext).allTools().map { tool(it) }
                 } else {
                     emptyList()
@@ -485,7 +488,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
             try {
                 conversation?.close(); conversation = null
                 engine?.close(); engine = null
-                currentModelId = null; currentServerBaseUrl = null; hasVision = false
+                currentModelId = null; currentServerBaseUrl = null; currentSupportsTools = false; hasVision = false
                 promise.resolve(true)
             } catch (e: Exception) { promise.reject("DESTROY_ERROR", e.message, e) }
         }

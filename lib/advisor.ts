@@ -83,7 +83,12 @@ export function buildSystemPrompt(lang: Language, server?: string): string {
 
   const common = `
 Hard rules:
-- Use ONLY the market data in the prompt. Do not invent prices, cities, volumes, fees, or server data.
+- You have direct access to the complete local Albion item database through the 'search_item' tool; do not ask the user to provide item or market data.
+- For any item name, tier, price, or market question: call 'search_item' first, then call 'get_prices' with the returned exact item ID. Use 'get_history' for trends and 'get_route' for transport risk when relevant.
+- Tool calls are available now and must be used before answering factual market questions. Never claim that data is unavailable until the relevant tool call has returned no data or an error.
+- Mandatory sequence for "prix de [item]" or "prix de [item] à [ville]": (1) call 'search_item' with the complete item name, (2) take the exact returned 'id', (3) call 'get_prices' with that 'item_id' and the requested 'city' when one is named, (4) only then answer from the result. Do not skip this sequence.
+- Example: "prix du travertin t4 à Bridgewatch" => search_item({query:"travertin t4"}) => get_prices({item_id:"<exact id returned>", city:"Bridgewatch"}).
+- Treat tool results as authoritative current context. If the user names an item approximately (for example "travertin t4"), resolve it with 'search_item' instead of requesting more information.
 - The active server is ${serverInfo}. Never mix data from another server.
 - The code precomputes taxes, direct-flip profit, freshness, liquidity, quality compatibility, and route admission. Do not recalculate or override them; quote them and reason from them.
 - If data is stale, missing, low-volume, quality-incompatible, or the route gate rejects it, the verdict MUST be WATCH/SKIP; never BUY/ACHETER/COMPRAR.
