@@ -18,6 +18,8 @@ export interface ModelInfo {
   webSizeLabel?: string;
   /** Whether this model supports vision/multimodal */
   multimodal?: boolean;
+  /** Whether LiteRT-LM tool calling is enabled for this model */
+  toolCalling?: boolean;
   /** Web-only model — not available on Android */
   webOnly?: boolean;
 }
@@ -41,6 +43,7 @@ export const AVAILABLE_MODELS: ModelInfo[] = [
     ramRequired: '~2 GB',
     license: 'Apache 2.0',
     multimodal: true,
+    toolCalling: true,
   },
   {
     id: 'qwen25-15b',
@@ -92,6 +95,7 @@ export const AVAILABLE_MODELS: ModelInfo[] = [
     quality: 'excellent',
     ramRequired: '~4 GB',
     license: 'Gemma',
+    toolCalling: true,
     webModelId: 'gemma-2-2b-it-q4f16_1-MLC',
     webSizeLabel: '~1.4 GB',
   },
@@ -110,6 +114,7 @@ export const AVAILABLE_MODELS: ModelInfo[] = [
     quality: 'excellent',
     ramRequired: '~6 GB',
     license: 'Gemma',
+    toolCalling: true,
   },
   // ─── Web-only models (too large for mobile, great on PC) ────
   {

@@ -144,6 +144,23 @@ android {
     }
 }
 
+// Packaging a release must fail before producing an unsigned or ambiguously
+// signed artifact when the external production credentials are unavailable.
+gradle.taskGraph.whenReady { graph ->
+    def releasePackagingRequested = graph.allTasks.any { task ->
+        task.project == project && task.name in ['assembleRelease', 'bundleRelease', 'packageRelease']
+    }
+    def signingKeys = [
+        'ALBION_UPLOAD_STORE_FILE',
+        'ALBION_UPLOAD_STORE_PASSWORD',
+        'ALBION_UPLOAD_KEY_ALIAS',
+        'ALBION_UPLOAD_KEY_PASSWORD',
+    ]
+    if (releasePackagingRequested && !signingKeys.every { project.hasProperty(it) }) {
+        throw new GradleException('Release packaging refused: ALBION_UPLOAD_* production signing credentials are incomplete.')
+    }
+}
+
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
 // Accepts values in comma delimited lists, example:
 // android.packagingOptions.pickFirsts=/LICENSE,**/picasa.ini
@@ -169,7 +186,7 @@ dependencies {
     implementation("com.facebook.react:react-android")
 
     // LiteRT-LM — on-device LLM inference with GPU acceleration
-    implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.1")
     // Coroutines for async inference
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 

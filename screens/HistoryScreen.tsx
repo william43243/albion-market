@@ -119,6 +119,8 @@ export default function HistoryScreen({ t, lang, server }: Props) {
       Alert.alert(t('error'), t('selectCities'));
       return;
     }
+    const scope = requestScope.begin();
+    if (!scope) return;
     setLoading(true);
     const generation = ++requestGeneration.current;
     try {
@@ -134,7 +136,7 @@ export default function HistoryScreen({ t, lang, server }: Props) {
       if (generation !== requestGeneration.current) return;
       setHistoryData(allData);
     } catch (e) {
-      Alert.alert(t('error'), String(e));
+      if (scope.current()) Alert.alert(t('error'), String(e));
     }
     setLoading(false);
   }, [selectedItems, selectedCities, period, timeScale, server, quality]);

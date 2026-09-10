@@ -29,13 +29,23 @@ const TAB_ICONS: Record<TabKey, string> = {
 
 const TABS: TabKey[] = ['marketplace', 'crafting', 'flipping', 'history', 'advisor', 'settings'];
 
+function ScreenSlot({ active, foreground, children }: { active: boolean; foreground: boolean; children: React.ReactNode }) {
+  return (
+    <ScreenActiveContext.Provider value={active && foreground}>
+      <View style={[styles.screenContainer, !active && { display: 'none' }]}>{children}</View>
+    </ScreenActiveContext.Provider>
+  );
+}
+
 function AppContent() {
   const { lang, switchLanguage, t, loaded } = useLanguage();
   const { server, switchServer, serverLoaded } = useServer();
   const { city, selectCity, cityLoaded } = usePlayerCity();
   const [showCitySelector, setShowCitySelector] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>('marketplace');
+  const [visitedTabs, setVisitedTabs] = useState<Set<TabKey>>(() => new Set(['marketplace']));
   const [isPremium, setIsPremium] = useState(true);
+  const foreground = useAppForeground();
   const insets = useSafeAreaInsets();
 
   // Track initial page view
@@ -44,6 +54,7 @@ function AppContent() {
   }, []);
 
   const handleTabChange = (tab: TabKey) => {
+    setVisitedTabs((previous) => previous.has(tab) ? previous : new Set([...previous, tab]));
     setActiveTab(tab);
     trackPageView('/' + tab);
     trackToolUse(tab);
@@ -73,14 +84,14 @@ function AppContent() {
       {/* All screens stay mounted; hidden via display:'none' to preserve state */}
       <View style={[styles.screenContainer, activeTab !== 'marketplace' && { display: 'none' }]}>
         <MarketplaceScreen t={t} lang={lang} server={server} isPremium={isPremium} onPremiumChange={setIsPremium} />
-      </View>
-      <View style={[styles.screenContainer, activeTab !== 'crafting' && { display: 'none' }]}>
+      </ScreenSlot>
+      {visitedTabs.has('crafting') && <ScreenSlot active={activeTab === 'crafting'} foreground={foreground}>
         <CraftingScreen t={t} lang={lang} />
-      </View>
-      <View style={[styles.screenContainer, activeTab !== 'flipping' && { display: 'none' }]}>
+      </ScreenSlot>}
+      {visitedTabs.has('flipping') && <ScreenSlot active={activeTab === 'flipping'} foreground={foreground}>
         <FlippingScreen t={t} lang={lang} isPremium={isPremium} onPremiumChange={setIsPremium} />
-      </View>
-      <View style={[styles.screenContainer, activeTab !== 'history' && { display: 'none' }]}>
+      </ScreenSlot>}
+      {visitedTabs.has('history') && <ScreenSlot active={activeTab === 'history'} foreground={foreground}>
         <HistoryScreen t={t} lang={lang} server={server} />
       </View>
       <View style={[styles.screenContainer, activeTab !== 'advisor' && { display: 'none' }]}>
@@ -88,7 +99,7 @@ function AppContent() {
       </View>
       <View style={[styles.screenContainer, activeTab !== 'settings' && { display: 'none' }]}>
         <SettingsScreen t={t} lang={lang} onSwitchLanguage={switchLanguage} server={server} onSwitchServer={switchServer} />
-      </View>
+      </ScreenSlot>}
 
       <CitySelector
         visible={showCitySelector || city === null}

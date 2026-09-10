@@ -5,6 +5,7 @@ import android.util.Log
 import com.google.ai.edge.litertlm.OpenApiTool
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -17,9 +18,46 @@ class AlbionTools(private val serverBaseUrl: String, private val context: Contex
         private const val TAG = "AlbionTools"
         private const val CONNECT_TIMEOUT = 10_000
         private const val READ_TIMEOUT = 15_000
+        private const val MAX_RESPONSE_BYTES = 2 * 1024 * 1024
     }
 
+    private val allowedServerBases = setOf(
+        "https://west.albion-online-data.com/api/v2/stats",
+        "https://europe.albion-online-data.com/api/v2/stats",
+        "https://east.albion-online-data.com/api/v2/stats",
+    )
+
+    init { require(serverBaseUrl in allowedServerBases) { "Unsupported Albion server" } }
+
     private val itemsDb: List<JSONObject> by lazy { loadItemsDb() }
+
+    private fun requireKnownItemId(raw: String): String {
+        val itemId = raw.trim()
+        require(itemsDb.any { it.optString("id") == itemId }) { "Unknown item_id" }
+        return itemId
+    }
+
+    private fun parseAodpTimestamp(raw: String): Long {
+        require(raw.length in 19..35) { "Invalid AODP timestamp" }
+        val patterns = if (raw.endsWith("Z") || raw.matches(Regex(".*[+-]\\d{2}:\\d{2}$"))) {
+            listOf("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", "yyyy-MM-dd'T'HH:mm:ssXXX")
+        } else {
+            listOf("yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss")
+        }
+        for (pattern in patterns) {
+            val parser = SimpleDateFormat(pattern, Locale.US).apply {
+                isLenient = false
+                timeZone = TimeZone.getTimeZone("UTC")
+            }
+            val position = ParsePosition(0)
+            val parsed = parser.parse(raw, position)
+            if (parsed != null && position.index == raw.length) {
+                require(parsed.time <= System.currentTimeMillis() + 5 * 60_000L) { "Future AODP timestamp" }
+                return parsed.time
+            }
+        }
+        throw IllegalArgumentException("Invalid AODP timestamp")
+    }
 
     private fun loadItemsDb(): List<JSONObject> {
         return try {
@@ -65,16 +103,17 @@ class AlbionTools(private val serverBaseUrl: String, private val context: Contex
                 val cities = "Caerleon,Bridgewatch,Fort Sterling,Lymhurst,Thetford,Martlock,Brecilien"
                 val response = httpGet("$serverBaseUrl/prices/${encodePath(itemId)}.json?locations=${encodeQuery(cities)}&qualities=$quality")
                 val prices = JSONArray(response)
-                val result = JSONObject(); val cityPrices = JSONArray()
+                require(prices.length() <= 100) { "Too many price rows" }
+                val result = JSONObject(); val cityPrices = JSONArray(); val seen = mutableSetOf<String>()
                 for (i in 0 until prices.length()) {
                     val p = prices.getJSONObject(i)
                     if (p.optInt("quality", 1) != quality) continue
                     val sellMin = p.optInt("sell_price_min", 0); val buyMax = p.optInt("buy_price_max", 0)
                     if (sellMin == 0 && buyMax == 0) continue
                     cityPrices.put(JSONObject().apply {
-                        put("city", p.getString("city"))
-                        if (sellMin > 0) { put("sell", sellMin); put("sell_date", p.optString("sell_price_min_date", "")) }
-                        if (buyMax > 0) { put("buy", buyMax); put("buy_date", p.optString("buy_price_max_date", "")) }
+                        put("city", city); put("quality", 1)
+                        if (sellMin > 0) { put("sell", sellMin); put("sell_date", sellDate) }
+                        if (buyMax > 0) { put("buy", buyMax); put("buy_date", buyDate) }
                     })
                 }
                 result.put("item", itemId); result.put("prices", cityPrices); result.toString()
@@ -98,16 +137,23 @@ class AlbionTools(private val serverBaseUrl: String, private val context: Contex
                 for (i in 0 until history.length()) {
                     val h = history.getJSONObject(i); if (h.optInt("quality", 1) != quality) continue; val data = h.getJSONArray("data")
                     if (data.length() == 0) continue
-                    var sum = 0L; var count = 0; var totalVol = 0L; var min = Long.MAX_VALUE; var max = 0L
+                    var weightedSum = 0L; var count = 0; var totalVol = 0L; var min = Long.MAX_VALUE; var max = 0L
+                    var lastTimestampMillis = Long.MIN_VALUE; var lastPrice = 0L; val seenTimes = mutableSetOf<Long>()
                     for (j in 0 until data.length()) {
-                        val d = data.getJSONObject(j); val avg = d.getLong("avg_price")
-                        if (avg <= 0) continue; sum += avg; count++; totalVol += d.getLong("item_count")
+                        val d = data.getJSONObject(j); val avg = d.getLong("avg_price"); val volume = d.getLong("item_count")
+                        val timestampMillis = parseAodpTimestamp(d.getString("timestamp"))
+                        require(avg in 0..Int.MAX_VALUE && volume in 0..Int.MAX_VALUE && seenTimes.add(timestampMillis)) { "Invalid history point" }
+                        if (avg <= 0) continue
+                        weightedSum = Math.addExact(weightedSum, Math.multiplyExact(avg, volume))
+                        totalVol = Math.addExact(totalVol, volume)
+                        count++
                         if (avg < min) min = avg; if (avg > max) max = avg
+                        if (timestampMillis > lastTimestampMillis) { lastTimestampMillis = timestampMillis; lastPrice = avg }
                     }
                     if (count == 0) continue
-                    val lastPrice = data.getJSONObject(data.length() - 1).getLong("avg_price")
+                    val weightedAverage = if (totalVol > 0) weightedSum / totalVol else min + (max - min) / 2
                     citySummaries.put(JSONObject().apply {
-                        put("city", h.getString("location")); put("avg", sum / count)
+                        put("city", city); put("quality", 1); put("avg", weightedAverage)
                         put("min", min); put("max", max); put("last", lastPrice); put("volume", totalVol)
                     })
                 }
