@@ -56,13 +56,11 @@ export const translations = {
     manualInput: 'Saisie manuelle',
 
     // Flipping
-    materialCost: 'Coût matériaux',
-    productPrice: 'Prix du produit fini',
     craftingCost: 'Coût de craft',
     totalInvestment: 'Investissement total',
     upfrontInvestment: 'Capital immobilisé',
     roi: 'ROI',
-    flippingInfo: 'Achat matériaux → Craft → Vente du produit fini. Tous les frais inclus.',
+    flippingInfo: "Achète puis revends le même item. Choisis un ordre d'achat, un ordre de vente ou les deux. Le craft n'est pas inclus.",
 
     // History
     selectItems: 'Sélectionner item(s)',
@@ -216,13 +214,11 @@ export const translations = {
     manualInput: 'Manual input',
 
     // Flipping
-    materialCost: 'Material cost',
-    productPrice: 'Finished product price',
     craftingCost: 'Crafting cost',
     totalInvestment: 'Total investment',
     upfrontInvestment: 'Upfront investment',
     roi: 'ROI',
-    flippingInfo: 'Buy materials → Craft → Sell product. All fees included.',
+    flippingInfo: 'Buy and resell the same item. Choose a buy order, a sell order, or both. Crafting is not included.',
 
     // History
     selectItems: 'Select item(s)',
@@ -377,13 +373,11 @@ export const translations = {
     manualInput: 'Entrada manual',
 
     // Flipping
-    materialCost: 'Coste de materiales',
-    productPrice: 'Precio del producto final',
     craftingCost: 'Coste de fabricación',
     totalInvestment: 'Inversión total',
     upfrontInvestment: 'Capital inmovilizado',
     roi: 'ROI',
-    flippingInfo: 'Comprar materiales → Fabricar → Vender producto. Todas las comisiones incluidas.',
+    flippingInfo: 'Compra y revende el mismo objeto. Elige una orden de compra, una de venta o ambas. La fabricación no está incluida.',
 
     // History
     selectItems: 'Seleccionar item(s)',

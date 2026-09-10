@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS } from '../constants/theme';
-import { calculateFlippingProfit } from '../lib/calculations';
+import { calculateFlipProfit } from '../lib/calculations';
 import { Language } from '../lib/i18n';
 import { trackFlipCalculation } from '../lib/analytics';
 import NumberInput from '../components/NumberInput';
@@ -16,24 +16,20 @@ interface Props {
 }
 
 export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: Props) {
-  const [materialBuyPrice, setMaterialBuyPrice] = useState('');
-  const [productSellPrice, setProductSellPrice] = useState('');
-  const [craftingItemValue, setCraftingItemValue] = useState('');
-  const [stationTax, setStationTax] = useState('');
+  const [buyPrice, setBuyPrice] = useState('');
+  const [sellPrice, setSellPrice] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [useBuyOrder, setUseBuyOrder] = useState(true);
   const [useSellOrder, setUseSellOrder] = useState(true);
 
   // Pure calculation — no side effects. Recomputes in real time on every input.
   const result = useMemo(() => {
-    const matBuy = parseFloat(materialBuyPrice) || 0;
-    const prodSell = parseFloat(productSellPrice) || 0;
-    const craftIV = parseFloat(craftingItemValue) || 0;
-    const tax = parseFloat(stationTax) || 0;
+    const buy = parseFloat(buyPrice) || 0;
+    const sell = parseFloat(sellPrice) || 0;
     const qty = parseInt(quantity) || 1;
-    if (matBuy <= 0 && prodSell <= 0) return null;
-    return calculateFlippingProfit(matBuy, prodSell, craftIV, tax, qty, isPremium, useBuyOrder, useSellOrder);
-  }, [materialBuyPrice, productSellPrice, craftingItemValue, stationTax, quantity, isPremium, useBuyOrder, useSellOrder]);
+    if (buy <= 0 && sell <= 0) return null;
+    return calculateFlipProfit(buy, sell, qty, isPremium, useBuyOrder, useSellOrder);
+  }, [buyPrice, sellPrice, quantity, isPremium, useBuyOrder, useSellOrder]);
 
   const trackedFirstValidRef = useRef(false);
 
@@ -84,41 +80,24 @@ export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: 
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
-          {lang === 'fr' ? '1. Achat Matériaux' : '1. Buy Materials'}
+          {lang === 'fr' ? "1. Prix d'achat" : '1. Buy price'}
         </Text>
         <NumberInput
-          label={t('materialCost')}
-          value={materialBuyPrice}
-          onChangeText={setMaterialBuyPrice}
-          info={lang === 'fr' ? 'Prix unitaire des matériaux' : 'Unit price of materials'}
+          label={t('buyPrice')}
+          value={buyPrice}
+          onChangeText={setBuyPrice}
+          info={lang === 'fr' ? "Prix unitaire d'achat" : 'Unit purchase price'}
         />
       </View>
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
-          {lang === 'fr' ? '2. Craft' : '2. Craft'}
+          {lang === 'fr' ? '2. Prix de vente' : '2. Sell price'}
         </Text>
         <NumberInput
-          label={t('itemValue')}
-          value={craftingItemValue}
-          onChangeText={setCraftingItemValue}
-          info={lang === 'fr' ? "Item Value du produit crafté" : "Item Value of crafted product"}
-        />
-        <NumberInput
-          label={t('stationTax')}
-          value={stationTax}
-          onChangeText={setStationTax}
-        />
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>
-          {lang === 'fr' ? '3. Vente Produit Fini' : '3. Sell Product'}
-        </Text>
-        <NumberInput
-          label={t('productPrice')}
-          value={productSellPrice}
-          onChangeText={setProductSellPrice}
+          label={t('sellPrice')}
+          value={sellPrice}
+          onChangeText={setSellPrice}
         />
       </View>
 
@@ -138,7 +117,7 @@ export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: 
             }}
             rows={[
               {
-                label: t('materialCost'),
+                label: t('buyPrice'),
                 value: `${result.marketplace.buyPrice * result.marketplace.quantity} silver`,
               },
               ...(useBuyOrder
@@ -152,7 +131,6 @@ export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: 
                   ]
                 : []),
               { label: t('salesTax'), value: `${result.marketplace.salesTax} silver` },
-              { label: t('craftingCost'), value: `${result.crafting.totalFee} silver` },
               {
                 label: t('fees') + ' ' + t('total'),
                 value: `${result.totalFees} silver`,

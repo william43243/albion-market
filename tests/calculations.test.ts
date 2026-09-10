@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  calculateFlippingProfit,
+  calculateFlipProfit,
   calculateMarketplaceProfit,
   breakEvenSellPrice,
   maxBuyPriceForTarget,
@@ -32,16 +32,17 @@ test('marketplace rounds each fee once on the full order amount', () => {
 });
 
 test('flipping ROI uses upfront capital rather than sale-time fees', () => {
-  const result = calculateFlippingProfit(100, 200, 0, 0, 10, true, true, true);
+  const result = calculateFlipProfit(100, 200, 10, true, true, true);
   assert.equal(result.upfrontInvestment, 1025);
   assert.equal(result.totalFees, 155);
   assert.equal(result.totalProfit, 845);
   assert.equal(result.roi, (845 / 1025) * 100);
 });
 
-test('crafting fee remains rounded once for the complete batch', () => {
-  const result = calculateFlippingProfit(0, 0, 101, 100, 10, true, false, false);
-  assert.equal(result.crafting.totalFee, 114);
+test('crafting remains outside the flip calculation', () => {
+  const result = calculateFlipProfit(100, 200, 10, true, false, false);
+  assert.equal('crafting' in result, false);
+  assert.equal(result.totalFees, 80);
 });
 
 test('break-even and target-profit prices respect selected strategy fees', () => {

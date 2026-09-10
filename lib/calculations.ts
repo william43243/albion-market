@@ -81,9 +81,8 @@ export interface CraftingResult {
   totalFee: number;
 }
 
-export interface FlippingResult {
+export interface FlipResult {
   marketplace: MarketplaceResult;
-  crafting: CraftingResult;
   totalProfit: number;
   totalFees: number;
   upfrontInvestment: number;
@@ -164,39 +163,34 @@ export function calculateCraftingFee(
 }
 
 /**
- * Flipping = Buy materials + Craft + Sell finished product.
- * ROI intentionally uses only capital committed before the sale: material cost,
- * buy-order fee when selected, and station fee.
+ * Flip = buy an item and sell the same item on the marketplace.
+ * No crafting, refining, nutrition, or station fee is included here.
+ * ROI uses capital committed before the sale: purchase cost and buy-order fee.
  */
-export function calculateFlippingProfit(
-  materialBuyPrice: number,
-  productSellPrice: number,
-  craftingItemValue: number,
-  stationTax: number,
+export function calculateFlipProfit(
+  buyPrice: number,
+  sellPrice: number,
   quantity: number,
   isPremium: boolean,
   useBuyOrder: boolean,
   useSellOrder: boolean
-): FlippingResult {
+): FlipResult {
   const marketplace = calculateMarketplaceProfit(
-    materialBuyPrice,
-    productSellPrice,
+    buyPrice,
+    sellPrice,
     quantity,
     isPremium,
     useBuyOrder,
     useSellOrder
   );
-  const crafting = calculateCraftingFee(craftingItemValue, stationTax, quantity);
-  const totalProfit = marketplace.netProfit - crafting.totalFee;
-  const totalFees = marketplace.totalFees + crafting.totalFee;
+  const totalProfit = marketplace.netProfit;
+  const totalFees = marketplace.totalFees;
   const upfrontInvestment = marketplace.buyPrice * marketplace.quantity
-    + marketplace.setupFeeBuy
-    + crafting.totalFee;
+    + marketplace.setupFeeBuy;
   const roi = upfrontInvestment > 0 ? (totalProfit / upfrontInvestment) * 100 : 0;
 
   return {
     marketplace,
-    crafting,
     totalProfit,
     totalFees,
     upfrontInvestment,
