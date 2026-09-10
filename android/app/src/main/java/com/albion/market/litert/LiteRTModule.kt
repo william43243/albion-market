@@ -22,7 +22,10 @@ import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.tool
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 class LiteRTModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -35,9 +38,11 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
     private var engine: Engine? = null
     private var conversation: Conversation? = null
     private var currentModelId: String? = null
+    private var currentServerBaseUrl: String? = null
     private var hasVision: Boolean = false
     private var backendUsed: String = "unknown"
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val conversationMutex = Mutex()
 
     private fun isMediaTekChipset(): Boolean {
         val soc = Build.HARDWARE.lowercase()
@@ -231,7 +236,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
     // ─── Engine Lifecycle ────────────────────────────────────────
 
     @ReactMethod
-    fun initialize(modelFilename: String, systemPrompt: String, serverBaseUrl: String, promise: Promise) {
+    fun initialize(modelFilename: String, systemPrompt: String, serverBaseUrl: String, enableVision: Boolean, promise: Promise) {
         scope.launch {
             try {
                 val modelFile = findModelFile(modelFilename)
@@ -263,7 +268,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
                         val config = EngineConfig(
                             modelPath = modelFile.absolutePath,
                             backend = gpuBackend,
-                            visionBackend = gpuBackend,
+                            visionBackend = if (enableVision) gpuBackend else null,
                             cacheDir = reactContext.cacheDir.path
                         )
                         newEngine = Engine(config).also { it.initialize() }
@@ -317,6 +322,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
 
                 engine = newEngine
                 currentModelId = modelFile.nameWithoutExtension
+                currentServerBaseUrl = serverBaseUrl
 
                 val albionTools = AlbionTools(serverBaseUrl, reactContext)
                 val toolList = albionTools.allTools().map { tool(it) }
@@ -326,7 +332,27 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
                     samplerConfig = SamplerConfig(topK = 20, topP = 0.9, temperature = 0.3),
                     tools = toolList,
                 )
-                conversation = newEngine!!.createConversation(convConfig)
+                try {
+                    conversation = newEngine.createConversation(convConfig)
+                } catch (visionError: Exception) {
+                    if (!hasVision) throw visionError
+                    // Some .litertlm packages advertise multimodal metadata but do
+                    // not ship TF_LITE_VISION_ENCODER. Keep text chat usable and
+                    // explicitly disable image capability instead of failing here.
+                    Log.w(TAG, "Vision conversation unavailable; retrying text-only: ${visionError.message}")
+                    newEngine.close()
+                    val fallbackBackend = gpuBackend ?: Backend.CPU()
+                    val fallbackConfig = EngineConfig(
+                        modelPath = modelFile.absolutePath,
+                        backend = fallbackBackend,
+                        cacheDir = reactContext.cacheDir.path
+                    )
+                    val fallbackEngine = Engine(fallbackConfig).also { it.initialize() }
+                    newEngine = fallbackEngine
+                    engine = fallbackEngine
+                    hasVision = false
+                    conversation = fallbackEngine.createConversation(convConfig)
+                }
 
                 promise.resolve(Arguments.createMap().apply {
                     putBoolean("success", true)
@@ -345,15 +371,18 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun sendMessage(userMessage: String, requestId: String, promise: Promise) {
-        val conv = conversation ?: run {
-            promise.reject("NOT_INITIALIZED", "Engine not initialized."); return
-        }
         scope.launch {
+            conversationMutex.lock()
+            val released = AtomicBoolean(false)
             try {
-                val callback = createStreamCallback(requestId)
+                val conv = conversation ?: throw IllegalStateException("Engine not initialized.")
+                val callback = createStreamCallback(requestId) {
+                    if (released.compareAndSet(false, true)) conversationMutex.unlock()
+                }
                 conv.sendMessageAsync(userMessage, callback)
                 promise.resolve(true)
             } catch (e: Exception) {
+                if (released.compareAndSet(false, true)) conversationMutex.unlock()
                 Log.e(TAG, "sendMessage failed", e)
                 promise.reject("SEND_ERROR", e.message, e)
             }
@@ -362,24 +391,25 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun sendMessageWithImage(userMessage: String, imagePath: String, requestId: String, promise: Promise) {
-        val conv = conversation ?: run {
-            promise.reject("NOT_INITIALIZED", "Engine not initialized."); return
-        }
         if (!hasVision) {
             promise.reject("NO_VISION", "This model does not support images. Use a multimodal model (Qwen3.5).")
             return
         }
         scope.launch {
+            conversationMutex.lock()
+            val released = AtomicBoolean(false)
             try {
+                val conv = conversation ?: throw IllegalStateException("Engine not initialized.")
                 val imageFile = File(imagePath)
-                if (!imageFile.exists()) {
-                    promise.reject("IMAGE_NOT_FOUND", "Image not found: $imagePath"); return@launch
+                if (!imageFile.exists()) throw IllegalArgumentException("Image not found: $imagePath")
+                val callback = createStreamCallback(requestId) {
+                    if (released.compareAndSet(false, true)) conversationMutex.unlock()
                 }
-                val callback = createStreamCallback(requestId)
                 val content = Contents.of(Content.ImageFile(imagePath), Content.Text(userMessage))
                 conv.sendMessageAsync(content, callback)
                 promise.resolve(true)
             } catch (e: Exception) {
+                if (released.compareAndSet(false, true)) conversationMutex.unlock()
                 Log.e(TAG, "sendMessageWithImage failed", e)
                 promise.reject("SEND_ERROR", e.message, e)
             }
@@ -390,15 +420,21 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
     fun resetConversation(systemPrompt: String, promise: Promise) {
         val eng = engine ?: run { promise.reject("NOT_INITIALIZED", "Engine not initialized."); return }
         scope.launch {
-            try {
-                conversation?.close()
-                val convConfig = ConversationConfig(
-                    systemInstruction = Contents.of(systemPrompt),
-                    samplerConfig = SamplerConfig(topK = 20, topP = 0.9, temperature = 0.3)
-                )
-                conversation = eng.createConversation(convConfig)
-                promise.resolve(true)
-            } catch (e: Exception) { promise.reject("RESET_ERROR", e.message, e) }
+            conversationMutex.withLock {
+                try {
+                    conversation?.close()
+                    val resetTools = currentServerBaseUrl
+                        ?.let { AlbionTools(it, reactContext).allTools().map { apiTool -> tool(apiTool) } }
+                        ?: emptyList()
+                    val convConfig = ConversationConfig(
+                        systemInstruction = Contents.of(systemPrompt),
+                        samplerConfig = SamplerConfig(topK = 20, topP = 0.9, temperature = 0.3),
+                        tools = resetTools
+                    )
+                    conversation = eng.createConversation(convConfig)
+                    promise.resolve(true)
+                } catch (e: Exception) { promise.reject("RESET_ERROR", e.message, e) }
+            }
         }
     }
 
@@ -408,7 +444,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
             try {
                 conversation?.close(); conversation = null
                 engine?.close(); engine = null
-                currentModelId = null; hasVision = false
+                currentModelId = null; currentServerBaseUrl = null; hasVision = false
                 promise.resolve(true)
             } catch (e: Exception) { promise.reject("DESTROY_ERROR", e.message, e) }
         }
@@ -416,16 +452,20 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
 
     // ─── Helpers ─────────────────────────────────────────────────
 
-    private fun createStreamCallback(requestId: String) = object : MessageCallback {
+    private fun createStreamCallback(requestId: String, onFinished: () -> Unit = {}) = object : MessageCallback {
+        private val finished = AtomicBoolean(false)
+        private fun finishOnce() { if (finished.compareAndSet(false, true)) onFinished() }
         override fun onMessage(message: Message) {
             sendEvent("onLiteRTToken", Arguments.createMap().apply {
                 putString("requestId", requestId); putString("token", message.toString())
             })
         }
         override fun onDone() {
+            finishOnce()
             sendEvent("onLiteRTDone", Arguments.createMap().apply { putString("requestId", requestId) })
         }
         override fun onError(throwable: Throwable) {
+            finishOnce()
             sendEvent("onLiteRTError", Arguments.createMap().apply {
                 putString("requestId", requestId); putString("error", throwable.message ?: "Unknown error")
             })

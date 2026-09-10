@@ -4,6 +4,8 @@ import { View, Text, TouchableOpacity, StyleSheet, Platform, Dimensions } from '
 import { useSafeAreaInsets, SafeAreaProvider } from 'react-native-safe-area-context';
 import { useLanguage } from './hooks/useLanguage';
 import { useServer } from './hooks/useServer';
+import { usePlayerCity } from './hooks/usePlayerCity';
+import CitySelector from './components/CitySelector';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, SHADOWS } from './constants/theme';
 import { trackPageView, trackToolUse } from './lib/analytics';
 
@@ -30,6 +32,8 @@ const TABS: TabKey[] = ['marketplace', 'crafting', 'flipping', 'history', 'advis
 function AppContent() {
   const { lang, switchLanguage, t, loaded } = useLanguage();
   const { server, switchServer, serverLoaded } = useServer();
+  const { city, selectCity, cityLoaded } = usePlayerCity();
+  const [showCitySelector, setShowCitySelector] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>('marketplace');
   const [isPremium, setIsPremium] = useState(true);
   const insets = useSafeAreaInsets();
@@ -45,7 +49,7 @@ function AppContent() {
     trackToolUse(tab);
   };
 
-  if (!loaded || !serverLoaded) {
+  if (!loaded || !serverLoaded || !cityLoaded) {
     return (
       <View style={styles.loadingContainer}>
         <Text style={styles.loadingText}>Albion Market</Text>
@@ -59,6 +63,12 @@ function AppContent() {
 
       {/* Top safe area spacer */}
       <View style={{ height: insets.top, backgroundColor: COLORS.background }} />
+
+      {/* Current player city: mandatory once, one-tap to change afterwards. */}
+      <TouchableOpacity style={styles.locationBar} onPress={() => setShowCitySelector(true)} activeOpacity={0.8}>
+        <Text style={styles.locationText}>📍 {city || 'Choisir ma ville'}</Text>
+        <Text style={styles.locationAction}>{city ? 'Modifier' : 'Requis'}</Text>
+      </TouchableOpacity>
 
       {/* All screens stay mounted; hidden via display:'none' to preserve state */}
       <View style={[styles.screenContainer, activeTab !== 'marketplace' && { display: 'none' }]}>
@@ -74,11 +84,22 @@ function AppContent() {
         <HistoryScreen t={t} lang={lang} server={server} />
       </View>
       <View style={[styles.screenContainer, activeTab !== 'advisor' && { display: 'none' }]}>
-        <AdvisorScreen t={t} lang={lang} server={server} isPremium={isPremium} />
+        <AdvisorScreen t={t} lang={lang} server={server} playerCity={city} onCityDetected={selectCity} isPremium={isPremium} />
       </View>
       <View style={[styles.screenContainer, activeTab !== 'settings' && { display: 'none' }]}>
         <SettingsScreen t={t} lang={lang} onSwitchLanguage={switchLanguage} server={server} onSwitchServer={switchServer} />
       </View>
+
+      <CitySelector
+        visible={showCitySelector || city === null}
+        city={city}
+        required={city === null}
+        onSelect={async (nextCity) => {
+          await selectCity(nextCity);
+          setShowCitySelector(false);
+        }}
+        onClose={() => setShowCitySelector(false)}
+      />
 
       {/* Tab bar with bottom safe area */}
       <View
@@ -139,6 +160,26 @@ const styles = StyleSheet.create({
   },
   screenContainer: {
     flex: 1,
+  },
+  locationBar: {
+    minHeight: 38,
+    paddingHorizontal: SPACING.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: COLORS.backgroundElevated,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  locationText: {
+    color: COLORS.text,
+    fontSize: FONT_SIZE.sm,
+    fontWeight: '700',
+  },
+  locationAction: {
+    color: COLORS.primary,
+    fontSize: FONT_SIZE.xs,
+    fontWeight: '700',
   },
   tabBar: {
     flexDirection: 'row',

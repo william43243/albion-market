@@ -31,6 +31,46 @@ export interface MarketplaceResult {
   marginPercentage: number;
 }
 
+export type MarketplaceStrategy = 'instant-instant' | 'order-instant' | 'instant-order' | 'order-order';
+
+export function strategyFlags(strategy: MarketplaceStrategy): { useBuyOrder: boolean; useSellOrder: boolean } {
+  return {
+    useBuyOrder: strategy === 'order-instant' || strategy === 'order-order',
+    useSellOrder: strategy === 'instant-order' || strategy === 'order-order',
+  };
+}
+
+/** Lowest sale price for a non-negative result, preserving whole-silver fees. */
+export function breakEvenSellPrice(buyPrice: number, quantity: number, isPremium: boolean, strategy: MarketplaceStrategy, targetProfitPerItem = 0): number {
+  const flags = strategyFlags(strategy);
+  const qty = Math.max(1, Math.floor(quantity));
+  const target = Math.max(0, targetProfitPerItem) * qty;
+  let low = Math.max(0, buyPrice);
+  let high = Math.max(low + 1, low * 2 + target + 100);
+  while (calculateMarketplaceProfit(buyPrice, high, qty, isPremium, flags.useBuyOrder, flags.useSellOrder).netProfit < target) high *= 2;
+  for (let i = 0; i < 64; i += 1) {
+    const mid = Math.floor((low + high) / 2);
+    if (calculateMarketplaceProfit(buyPrice, mid, qty, isPremium, flags.useBuyOrder, flags.useSellOrder).netProfit >= target) high = mid;
+    else low = mid + 1;
+  }
+  return high;
+}
+
+/** Highest purchase price for a requested per-item profit at a fixed sale price. */
+export function maxBuyPriceForTarget(sellPrice: number, quantity: number, isPremium: boolean, strategy: MarketplaceStrategy, targetProfitPerItem = 0): number {
+  const flags = strategyFlags(strategy);
+  const qty = Math.max(1, Math.floor(quantity));
+  const target = Math.max(0, targetProfitPerItem) * qty;
+  let low = 0; let high = Math.max(1, sellPrice);
+  while (calculateMarketplaceProfit(high, sellPrice, qty, isPremium, flags.useBuyOrder, flags.useSellOrder).netProfit >= target) high *= 2;
+  for (let i = 0; i < 64; i += 1) {
+    const mid = Math.floor((low + high) / 2);
+    if (calculateMarketplaceProfit(mid, sellPrice, qty, isPremium, flags.useBuyOrder, flags.useSellOrder).netProfit >= target) low = mid;
+    else high = mid - 1;
+  }
+  return low;
+}
+
 export interface CraftingResult {
   itemValue: number;
   stationTax: number;
@@ -46,43 +86,36 @@ export interface FlippingResult {
   crafting: CraftingResult;
   totalProfit: number;
   totalFees: number;
+  upfrontInvestment: number;
   roi: number;
 }
 
 /**
- * Marketplace profit calculation
- * Setup Fee = ceil(price × 0.025) — always 2.5%, not affected by Premium
- * Sales Tax = ceil(sell_price × rate) — 4% Premium, 8% Non-Premium
- * All fees rounded up (ceil) per wiki
+ * Marketplace profit calculation.
+ * A buy order and a sell order are independent. Each fee is rounded once on
+ * the complete order amount, never once per item.
  */
 export function calculateMarketplaceProfit(
   buyPrice: number,
   sellPrice: number,
   quantity: number,
   isPremium: boolean,
-  useOrders: boolean
+  useBuyOrder: boolean,
+  useSellOrder: boolean
 ): MarketplaceResult {
-  // Defensive: reject NaN/Infinity/negative inputs before any math.
   buyPrice = sanitizeAmount(buyPrice);
   sellPrice = sanitizeAmount(sellPrice);
   quantity = sanitizeQuantity(quantity);
 
   const taxRate = isPremium ? 0.04 : 0.08;
-
-  const setupFeeBuyPerUnit = useOrders ? Math.ceil(buyPrice * 0.025) : 0;
-  const setupFeeSellPerUnit = useOrders ? Math.ceil(sellPrice * 0.025) : 0;
-  const salesTaxPerUnit = Math.ceil(sellPrice * taxRate);
-
-  const setupFeeBuy = setupFeeBuyPerUnit * quantity;
-  const setupFeeSell = setupFeeSellPerUnit * quantity;
-  const salesTax = salesTaxPerUnit * quantity;
-  const totalFees = setupFeeBuy + setupFeeSell + salesTax;
-
   const totalRevenue = sellPrice * quantity;
   const totalCost = buyPrice * quantity;
+  const setupFeeBuy = useBuyOrder ? Math.ceil(totalCost * 0.025) : 0;
+  const setupFeeSell = useSellOrder ? Math.ceil(totalRevenue * 0.025) : 0;
+  const salesTax = Math.ceil(totalRevenue * taxRate);
+  const totalFees = setupFeeBuy + setupFeeSell + salesTax;
   const netProfit = totalRevenue - setupFeeSell - salesTax - totalCost - setupFeeBuy;
   const profitPerItem = quantity > 0 ? netProfit / quantity : 0;
-
   const feePercentage = totalRevenue > 0 ? (totalFees / totalRevenue) * 100 : 0;
   const marginPercentage = totalCost > 0 ? (netProfit / totalCost) * 100 : 0;
 
@@ -102,18 +135,14 @@ export function calculateMarketplaceProfit(
 }
 
 /**
- * Crafting / Refining Station Fee calculation
- * Nutrition per item = Item Value × 0.1125
- * Usage Fee per item = (Item Value × 0.1125 × Station_Tax) / 100
- * Station_Tax = fee per 100 nutrition (shown in-game)
- * Premium does NOT affect crafting fee
+ * Crafting / Refining Station Fee calculation.
+ * Premium does not change this station fee.
  */
 export function calculateCraftingFee(
   itemValue: number,
   stationTax: number,
   quantity: number
 ): CraftingResult {
-  // Defensive: reject NaN/Infinity/negative inputs before any math.
   itemValue = sanitizeAmount(itemValue);
   stationTax = sanitizeAmount(stationTax);
   quantity = sanitizeQuantity(quantity);
@@ -135,8 +164,9 @@ export function calculateCraftingFee(
 }
 
 /**
- * Flipping = Buy materials + Craft + Sell finished product
- * Combines marketplace and crafting calculations
+ * Flipping = Buy materials + Craft + Sell finished product.
+ * ROI intentionally uses only capital committed before the sale: material cost,
+ * buy-order fee when selected, and station fee.
  */
 export function calculateFlippingProfit(
   materialBuyPrice: number,
@@ -145,33 +175,31 @@ export function calculateFlippingProfit(
   stationTax: number,
   quantity: number,
   isPremium: boolean,
-  useOrders: boolean
+  useBuyOrder: boolean,
+  useSellOrder: boolean
 ): FlippingResult {
-  // Defensive: sanitize the inputs used directly here (roi denominator);
-  // the delegated calls sanitize their own inputs independently.
-  materialBuyPrice = sanitizeAmount(materialBuyPrice);
-  quantity = sanitizeQuantity(quantity);
-
   const marketplace = calculateMarketplaceProfit(
     materialBuyPrice,
     productSellPrice,
     quantity,
     isPremium,
-    useOrders
+    useBuyOrder,
+    useSellOrder
   );
-
   const crafting = calculateCraftingFee(craftingItemValue, stationTax, quantity);
-
   const totalProfit = marketplace.netProfit - crafting.totalFee;
   const totalFees = marketplace.totalFees + crafting.totalFee;
-  const totalInvestment = materialBuyPrice * quantity + totalFees;
-  const roi = totalInvestment > 0 ? (totalProfit / totalInvestment) * 100 : 0;
+  const upfrontInvestment = marketplace.buyPrice * marketplace.quantity
+    + marketplace.setupFeeBuy
+    + crafting.totalFee;
+  const roi = upfrontInvestment > 0 ? (totalProfit / upfrontInvestment) * 100 : 0;
 
   return {
     marketplace,
     crafting,
     totalProfit,
     totalFees,
+    upfrontInvestment,
     roi,
   };
 }

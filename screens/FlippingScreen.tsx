@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
-import { COLORS, SPACING, FONT_SIZE } from '../constants/theme';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS } from '../constants/theme';
 import { calculateFlippingProfit } from '../lib/calculations';
 import { Language } from '../lib/i18n';
 import { trackFlipCalculation } from '../lib/analytics';
@@ -21,7 +21,8 @@ export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: 
   const [craftingItemValue, setCraftingItemValue] = useState('');
   const [stationTax, setStationTax] = useState('');
   const [quantity, setQuantity] = useState('1');
-  const [useOrders, setUseOrders] = useState(true);
+  const [useBuyOrder, setUseBuyOrder] = useState(true);
+  const [useSellOrder, setUseSellOrder] = useState(true);
 
   // Pure calculation — no side effects. Recomputes in real time on every input.
   const result = useMemo(() => {
@@ -31,8 +32,8 @@ export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: 
     const tax = parseFloat(stationTax) || 0;
     const qty = parseInt(quantity) || 1;
     if (matBuy <= 0 && prodSell <= 0) return null;
-    return calculateFlippingProfit(matBuy, prodSell, craftIV, tax, qty, isPremium, useOrders);
-  }, [materialBuyPrice, productSellPrice, craftingItemValue, stationTax, quantity, isPremium, useOrders]);
+    return calculateFlippingProfit(matBuy, prodSell, craftIV, tax, qty, isPremium, useBuyOrder, useSellOrder);
+  }, [materialBuyPrice, productSellPrice, craftingItemValue, stationTax, quantity, isPremium, useBuyOrder, useSellOrder]);
 
   const trackedFirstValidRef = useRef(false);
 
@@ -65,6 +66,21 @@ export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: 
         labelOn={t('premium')}
         labelOff={t('nonPremium')}
       />
+
+      <View style={styles.orderToggle}>
+        <TouchableOpacity
+          style={[styles.orderBtn, useBuyOrder && styles.orderBtnActive]}
+          onPress={() => setUseBuyOrder((value) => !value)}
+        >
+          <Text style={[styles.orderBtnText, useBuyOrder && styles.orderBtnTextActive]}>{t('useBuyOrder')}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.orderBtn, useSellOrder && styles.orderBtnActive]}
+          onPress={() => setUseSellOrder((value) => !value)}
+        >
+          <Text style={[styles.orderBtnText, useSellOrder && styles.orderBtnTextActive]}>{t('useSellOrder')}</Text>
+        </TouchableOpacity>
+      </View>
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
@@ -125,9 +141,13 @@ export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: 
                 label: t('materialCost'),
                 value: `${result.marketplace.buyPrice * result.marketplace.quantity} silver`,
               },
-              ...(useOrders
+              ...(useBuyOrder
                 ? [
                     { label: t('setupFeeBuy'), value: `${result.marketplace.setupFeeBuy} silver` },
+                  ]
+                : []),
+              ...(useSellOrder
+                ? [
                     { label: t('setupFeeSell'), value: `${result.marketplace.setupFeeSell} silver` },
                   ]
                 : []),
@@ -138,6 +158,11 @@ export default function FlippingScreen({ t, lang, isPremium, onPremiumChange }: 
                 value: `${result.totalFees} silver`,
                 bold: true,
                 color: COLORS.loss,
+              },
+              {
+                label: t('upfrontInvestment'),
+                value: `${result.upfrontInvestment} silver`,
+                bold: true,
               },
               {
                 label: t('roi'),
@@ -190,4 +215,24 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginBottom: SPACING.sm,
   },
+  orderToggle: {
+    flexDirection: 'row',
+    marginBottom: SPACING.lg,
+    gap: SPACING.sm,
+  },
+  orderBtn: {
+    flex: 1,
+    paddingVertical: SPACING.sm,
+    alignItems: 'center',
+    borderRadius: BORDER_RADIUS.sm,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  orderBtnActive: {
+    backgroundColor: COLORS.primary + '20',
+    borderColor: COLORS.primary,
+  },
+  orderBtnText: { color: COLORS.textMuted, fontSize: FONT_SIZE.sm },
+  orderBtnTextActive: { color: COLORS.primary, fontWeight: '600' },
 });

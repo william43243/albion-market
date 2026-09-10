@@ -30,7 +30,7 @@ assert_true("authorization" in server.lower() and "bearer" in server.lower(), "a
 assert_true("assume premium" not in advisor, "advisor still documents hardcoded premium assumption")
 assert_true(re.search(r"buildAnalysisPrompt\([^)]*isPremium", advisor, re.S), "buildAnalysisPrompt must accept isPremium")
 assert_true("0.08" in advisor and "Non-Premium" in advisor, "advisor must include non-premium tax path/context")
-assert_true("buildAnalysisPrompt(ctx, lang, isPremium)" in advisor_screen, "AdvisorScreen must pass isPremium to buildAnalysisPrompt")
+assert_true(re.search(r"buildAnalysisPrompt\(ctx, lang, isPremium(?:, [A-Za-z_][A-Za-z0-9_]*)?\)", advisor_screen), "AdvisorScreen must pass isPremium to buildAnalysisPrompt")
 
 assert_true("const [isPremium, setIsPremium]" in app, "App must own premium state")
 assert_true("isPremium={isPremium}" in app and "onPremiumChange={setIsPremium}" in app, "App must pass premium state/change handlers")

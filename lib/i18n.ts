@@ -32,6 +32,8 @@ export const translations = {
     buyPrice: "Prix d'achat",
     sellPrice: 'Prix de vente',
     useOrders: 'Buy/Sell Orders (limités)',
+    useBuyOrder: "Créer un ordre d'achat",
+    useSellOrder: 'Créer un ordre de vente',
     directTrade: 'Achat/Vente direct (instant)',
     setupFeeBuy: "Setup Fee (achat)",
     setupFeeSell: "Setup Fee (vente)",
@@ -58,6 +60,7 @@ export const translations = {
     productPrice: 'Prix du produit fini',
     craftingCost: 'Coût de craft',
     totalInvestment: 'Investissement total',
+    upfrontInvestment: 'Capital immobilisé',
     roi: 'ROI',
     flippingInfo: 'Achat matériaux → Craft → Vente du produit fini. Tous les frais inclus.',
 
@@ -75,7 +78,7 @@ export const translations = {
     minPrice: 'Prix min',
     maxPrice: 'Prix max',
     compare: 'Comparer',
-    noData: 'Aucune donnée disponible',
+    liveTracking: 'Live tracking', liveTrackingOn: 'Live tracking actif', liveTrackingOff: 'Démarrer le live tracking', resumeLiveTracking: 'Reprendre le live tracking', liveWaiting: 'En attente…', newData: 'Nouvelle donnée', noNewData: 'Aucune nouvelle donnée', lastPoll: 'Dernier poll', stopLiveTracking: 'Arrêter le live tracking', rateLimitError: 'Limite API atteinte : suivi suspendu', frequency: 'Fréquence', liveNoData: 'Aucune donnée live valide', liveSeries: 'séries', liveRetrying: 'Reprise après erreur', averagePriceSilver: 'Prix moyen (silver)', truncatedData: 'Certaines villes ont moins de données ; le graphique montre seulement la période commune.', latestData: 'Dernières données', noCommonTimestamps: 'Pas de timestamps communs : statistiques conservées, courbe non tracée.', legend: 'Légende', city: 'Ville', average: 'Moy', current: 'Actuel', noData: 'Aucune donnée disponible',
 
     // Settings
     language: 'Langue',
@@ -189,6 +192,8 @@ export const translations = {
     buyPrice: 'Buy price',
     sellPrice: 'Sell price',
     useOrders: 'Buy/Sell Orders (limit)',
+    useBuyOrder: 'Create buy order',
+    useSellOrder: 'Create sell order',
     directTrade: 'Direct buy/sell (instant)',
     setupFeeBuy: 'Setup Fee (buy)',
     setupFeeSell: 'Setup Fee (sell)',
@@ -215,6 +220,7 @@ export const translations = {
     productPrice: 'Finished product price',
     craftingCost: 'Crafting cost',
     totalInvestment: 'Total investment',
+    upfrontInvestment: 'Upfront investment',
     roi: 'ROI',
     flippingInfo: 'Buy materials → Craft → Sell product. All fees included.',
 
@@ -232,6 +238,7 @@ export const translations = {
     minPrice: 'Min price',
     maxPrice: 'Max price',
     compare: 'Compare',
+    liveTracking: 'Live tracking', liveTrackingOn: 'Live tracking active', liveTrackingOff: 'Start live tracking', resumeLiveTracking: 'Resume live tracking', liveWaiting: 'Waiting…', newData: 'New data', noNewData: 'No new data', lastPoll: 'Last poll', stopLiveTracking: 'Stop live tracking', rateLimitError: 'API rate limit reached: tracking suspended', frequency: 'Frequency', liveNoData: 'No valid live data', liveSeries: 'series', liveRetrying: 'Retrying after error', averagePriceSilver: 'Average price (silver)', truncatedData: 'Some cities have fewer data points; chart shows only the shared period.', latestData: 'Latest data', noCommonTimestamps: 'No common timestamps: statistics kept, chart omitted.', legend: 'Legend', city: 'City', average: 'Avg', current: 'Current',
     noData: 'No data available',
 
     // Settings
@@ -346,6 +353,8 @@ export const translations = {
     buyPrice: 'Precio de compra',
     sellPrice: 'Precio de venta',
     useOrders: 'Órdenes Buy/Sell (límite)',
+    useBuyOrder: 'Crear orden de compra',
+    useSellOrder: 'Crear orden de venta',
     directTrade: 'Compra/Venta directa (instantánea)',
     setupFeeBuy: 'Setup Fee (compra)',
     setupFeeSell: 'Setup Fee (venta)',
@@ -372,6 +381,7 @@ export const translations = {
     productPrice: 'Precio del producto final',
     craftingCost: 'Coste de fabricación',
     totalInvestment: 'Inversión total',
+    upfrontInvestment: 'Capital inmovilizado',
     roi: 'ROI',
     flippingInfo: 'Comprar materiales → Fabricar → Vender producto. Todas las comisiones incluidas.',
 
@@ -389,6 +399,7 @@ export const translations = {
     minPrice: 'Precio mín',
     maxPrice: 'Precio máx',
     compare: 'Comparar',
+    liveTracking: 'Seguimiento en vivo', liveTrackingOn: 'Seguimiento activo', liveTrackingOff: 'Iniciar seguimiento', resumeLiveTracking: 'Reanudar seguimiento', liveWaiting: 'Esperando…', newData: 'Datos nuevos', noNewData: 'Sin datos nuevos', lastPoll: 'Última consulta', stopLiveTracking: 'Detener seguimiento', rateLimitError: 'Límite de API alcanzado: seguimiento suspendido', frequency: 'Frecuencia', liveNoData: 'Sin datos válidos en vivo', liveSeries: 'series', liveRetrying: 'Reintentando tras un error', averagePriceSilver: 'Precio medio (silver)', truncatedData: 'Algunas ciudades tienen menos datos; el gráfico muestra solo el período común.', latestData: 'Últimos datos', noCommonTimestamps: 'No hay marcas de tiempo comunes: se conservan las estadísticas y se omite la curva.', legend: 'Leyenda', city: 'Ciudad', average: 'Media', current: 'Actual',
     noData: 'No hay datos disponibles',
 
     // Settings

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,9 +10,11 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
+import Svg, { Line as SvgLine, Polyline as SvgPolyline } from 'react-native-svg';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS } from '../constants/theme';
 import {
   fetchPriceHistory,
+  fetchCurrentPricesLiveBatch,
   CITIES,
   City,
   Server,
@@ -20,10 +22,15 @@ import {
   formatDateForApi,
   daysAgo,
   formatDataAge,
+  Quality,
 } from '../lib/api';
 import { AlbionItem } from '../lib/items';
 import { Language } from '../lib/i18n';
+import { createLiveTrackingController, LiveCadence, LIVE_INTERVALS } from '../lib/liveTrackingController';
+import { LivePoint } from '../lib/liveTracking';
+import { mergeLivePointsIntoHistory, unionLiveTimestamps, decimateLiveTimestamps, createLiveChartProjection, projectLiveChartPoint, splitLiveChartLineSegments } from '../lib/liveChart';
 import ItemPicker from '../components/ItemPicker';
+import QualitySelector from '../components/QualitySelector';
 
 interface Props {
   t: (key: any) => any;
@@ -62,9 +69,27 @@ export default function HistoryScreen({ t, lang, server }: Props) {
   const [selectedCities, setSelectedCities] = useState<Set<City>>(new Set(['Caerleon']));
   const [period, setPeriod] = useState<number>(30);
   const [timeScale, setTimeScale] = useState<1 | 24>(24);
+  const [quality, setQuality] = useState<Quality>(1);
   const [showItemPicker, setShowItemPicker] = useState(false);
+  const [liveEnabled, setLiveEnabled] = useState(false);
+  const [liveCadence, setLiveCadence] = useState<LiveCadence>('1m');
+  const [livePoints, setLivePoints] = useState<LivePoint[]>([]);
+  const [liveSeriesCount, setLiveSeriesCount] = useState(0);
+  const [liveStatus, setLiveStatus] = useState<'waiting' | 'new-data' | 'no-new-data' | 'no-data' | 'error'>('waiting');
+  const [livePollAt, setLivePollAt] = useState<number | undefined>();
+  const [liveError, setLiveError] = useState<string | undefined>();
+  const [liveSuspended, setLiveSuspended] = useState(false);
+  const [liveDashedSegments, setLiveDashedSegments] = useState<import('../lib/liveChart').LiveChartSegment[]>([]);
+  const liveController = useRef(createLiveTrackingController({
+    fetchPrices: (config) => fetchCurrentPricesLiveBatch(config.itemIds, config.cities, config.server, config.quality),
+    onUpdate: (snapshot) => { setLivePoints(snapshot.points); setLiveSeriesCount(snapshot.seriesCount); setLiveDashedSegments(snapshot.dashedSegments); setLiveStatus(snapshot.status); setLivePollAt(snapshot.lastPollAt); setLiveError(snapshot.error?.message); setLiveSuspended(snapshot.state === 'suspended'); },
+  }));
+  const liveConfigKey = `${selectedItems.map(i => i.id).join(',')}|${[...selectedCities].join(',')}|${server}|${quality}`;
+  useEffect(() => () => liveController.current.stop(), []);
+  useEffect(() => { if (liveEnabled) { liveController.current.stop(); setLiveEnabled(false); setLiveSuspended(false); setLivePoints([]); } }, [liveConfigKey]);
   const [historyData, setHistoryData] = useState<HistoryResponse[]>([]);
   const [loading, setLoading] = useState(false);
+  const requestGeneration = useRef(0);
 
   const periodLabels: Record<string, string> = {
     '7d': t('days7'),
@@ -95,6 +120,7 @@ export default function HistoryScreen({ t, lang, server }: Props) {
       return;
     }
     setLoading(true);
+    const generation = ++requestGeneration.current;
     try {
       const startDate = formatDateForApi(daysAgo(period));
       const endDate = formatDateForApi(new Date());
@@ -102,102 +128,69 @@ export default function HistoryScreen({ t, lang, server }: Props) {
 
       const allData: HistoryResponse[] = [];
       for (const item of selectedItems) {
-        const data = await fetchPriceHistory(item.id, cities, startDate, endDate, timeScale, server);
+        const data = await fetchPriceHistory(item.id, cities, startDate, endDate, timeScale, server, quality);
         allData.push(...data);
       }
+      if (generation !== requestGeneration.current) return;
       setHistoryData(allData);
     } catch (e) {
       Alert.alert(t('error'), String(e));
     }
     setLoading(false);
-  }, [selectedItems, selectedCities, period, timeScale, server]);
+  }, [selectedItems, selectedCities, period, timeScale, server, quality]);
 
   // Prepare cleaned chart data
   const chartInfo = React.useMemo(() => {
     if (historyData.length === 0) return null;
 
-    // Filter entries that actually have data with non-zero prices
-    const validEntries = historyData.filter(
-      (h) => h.data.length > 0 && h.data.some((d) => d.avg_price > 0)
-    );
+    const displayHistory = mergeLivePointsIntoHistory(historyData, livePoints);
+    const validEntries = displayHistory
+      .filter((h) => h.data.some((d) => d.avg_price > 0))
+      .map((entry) => ({ entry, values: new Map(entry.data.filter((d) => d.avg_price > 0).map((d) => [d.timestamp, d.avg_price])) }))
+      .filter((series) => series.values.size > 0);
     if (validEntries.length === 0) return null;
 
-    const validSeries = validEntries.map((entry) => ({
-      entry,
-      points: entry.data.filter((d) => d.avg_price > 0),
-    })).filter((series) => series.points.length > 0);
-    if (validSeries.length === 0) return null;
-
-    const longestSeries = validSeries.reduce((a, b) =>
-      a.points.length >= b.points.length ? a : b
-    );
-    const minSeriesLength = Math.min(...validSeries.map((series) => series.points.length));
-    const hasTruncatedSeries = validSeries.some((series) => series.points.length !== longestSeries.points.length);
-
-    // Max 5 labels for readability. Use only the common overlap so sparse
-    // cities do not get fake flatlines from repeated last-known prices.
-    const maxLabels = 5;
-    const totalPoints = minSeriesLength;
-    const labelStep = Math.max(1, Math.floor(totalPoints / maxLabels));
-
-    const labels: string[] = [];
-    for (let i = 0; i < totalPoints; i += labelStep) {
-      const d = new Date(longestSeries.points[i].timestamp);
-      labels.push(`${d.getDate()}/${d.getMonth() + 1}`);
-    }
-
-    const datasets: {
-      data: number[];
-      color: (opacity: number) => string;
-      strokeWidth: number;
-    }[] = [];
-
+    const axisTimestamps = unionLiveTimestamps([
+      ...validEntries.map(({ values }) => ({ timestamps: values.keys() })),
+      ...liveDashedSegments.map((segment) => ({ timestamps: [segment.from.timestamp, segment.to.timestamp] })),
+    ]);
+    const chartTimestamps = unionLiveTimestamps([
+      { timestamps: decimateLiveTimestamps(axisTimestamps) },
+      ...liveDashedSegments.map((segment) => ({ timestamps: [segment.from.timestamp, segment.to.timestamp] })),
+    ]);
+    const labels = chartTimestamps.map((timestamp) => {
+      const date = new Date(timestamp);
+      return `${date.getDate()}/${date.getMonth() + 1}`;
+    });
+    const datasets: { data: number[]; color: (opacity: number) => string; strokeWidth: number }[] = [];
+    const lineSeries: import('../lib/liveChart').LiveChartSeries[] = [];
     const legendEntries: { label: string; color: string; min: number; max: number; avg: number; last: number }[] = [];
-
-    for (const { entry, points } of validSeries) {
+    const chartValues: number[] = [];
+    for (const { entry, values } of validEntries) {
       const color = CITY_COLORS[entry.location] || '#FFFFFF';
-
-      // Sample only real data points in the shared overlap. Do not pad shorter
-      // series by repeating their last point; that looks like a frozen price.
-      const sampled: number[] = [];
-      for (let i = 0; i < totalPoints; i += labelStep) {
-        sampled.push(points[i]?.avg_price || 0);
+      const points = [...values.values()];
+      if (chartTimestamps.length >= 2) {
+        const data = chartTimestamps.map((timestamp) => values.get(timestamp) ?? null);
+        chartValues.push(...data.filter((value): value is number => value !== null));
+        datasets.push({ data: data as unknown as number[], color: () => 'transparent', strokeWidth: 0 });
+        lineSeries.push({ key: `${entry.item_id}|${entry.location}|${entry.quality}`, city: entry.location, color, points: chartTimestamps.flatMap((timestamp) => { const value = values.get(timestamp); return value === undefined ? [] : [{ key: `${entry.item_id}|${entry.location}|${entry.quality}`, itemId: entry.item_id, city: entry.location as import('../lib/api').City, quality: entry.quality as Quality, timestamp, value }]; }), dashedSegments: [] });
       }
-
-      while (sampled.length > labels.length) sampled.pop();
-
-      // Skip if all zeros
-      if (sampled.every((v) => v === 0)) continue;
-
-      datasets.push({
-        data: sampled,
-        color: (_opacity = 1) => color,
-        strokeWidth: 3,
-      });
-
-      // Stats
-      const prices = entry.data.map((d) => d.avg_price).filter((p) => p > 0);
-      const min = prices.length > 0 ? Math.min(...prices) : 0;
-      const max = prices.length > 0 ? Math.max(...prices) : 0;
-      const avg = prices.length > 0 ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : 0;
-      const last = prices.length > 0 ? prices[prices.length - 1] : 0;
-
-      // Short label: just city name (or item + city if multi-item)
-      const itemName = selectedItems.length > 1
-        ? `${entry.item_id.replace(/^T\d_/, '')} - ${entry.location}`
-        : entry.location;
-
-      legendEntries.push({ label: itemName, color, min, max, avg, last });
+      const min = Math.min(...points); const max = Math.max(...points);
+      const avg = Math.round(points.reduce((sum, value) => sum + value, 0) / points.length);
+      const lastTimestamp = [...values.keys()].sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
+      const itemName = selectedItems.length > 1 ? `${entry.item_id.replace(/^T\d_/, '')} - ${entry.location}` : entry.location;
+      legendEntries.push({ label: itemName, color, min, max, avg, last: values.get(lastTimestamp) as number });
     }
-
-    if (datasets.length === 0) return null;
-
-    return { labels, datasets, legendEntries, hasTruncatedSeries };
-  }, [historyData, selectedItems]);
+    const chartWidth = Math.max(screenWidth - SPACING.md, chartTimestamps.length * 60);
+    const projection = createLiveChartProjection(chartTimestamps, chartValues, chartWidth);
+    const lineSegments = splitLiveChartLineSegments(lineSeries, chartTimestamps);
+    return { labels, datasets, legendEntries, projection, lineSegments, hasTruncatedSeries: validEntries.some(({ values }) => values.size !== axisTimestamps.length), noCommonTimestamps: chartTimestamps.length === 0 };
+  }, [historyData, selectedItems, livePoints, liveDashedSegments]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>{t('history')}</Text>
+      <QualitySelector value={quality} lang={lang} onChange={(next) => { setQuality(next); setHistoryData([]); }} />
 
       {/* Item Selection */}
       <TouchableOpacity
@@ -274,6 +267,25 @@ export default function HistoryScreen({ t, lang, server }: Props) {
         </View>
       </View>
 
+      {/* Live tracking control; existing selectors above remain unchanged. */}
+      <View style={styles.liveRow}>
+        <TouchableOpacity style={[styles.liveBtn, liveEnabled && styles.liveBtnActive]} onPress={() => {
+          if (liveSuspended) { liveController.current.resume(); return; }
+          if (liveEnabled) { liveController.current.stop(); setLiveEnabled(false); return; }
+          if (!selectedItems.length || !selectedCities.size) { Alert.alert(t('error'), t('selectItems')); return; }
+          setLiveEnabled(true); liveController.current.start({ itemIds: selectedItems.map(i => i.id), cities: Array.from(selectedCities), server, quality, cadence: liveCadence });
+        }}>
+          <Text style={styles.liveBtnText}>{liveSuspended ? t('resumeLiveTracking') : liveEnabled ? t('stopLiveTracking') : t('liveTracking')}</Text>
+        </TouchableOpacity>
+        <View style={styles.cadenceGroup}>{(['5s', '1m', '5m'] as LiveCadence[]).map((cadence) => (
+          <TouchableOpacity key={cadence} style={[styles.cadenceBtn, liveCadence === cadence && styles.cadenceActive]} onPress={() => {
+            setLiveCadence(cadence);
+            if (liveEnabled && selectedItems.length && selectedCities.size) liveController.current.start({ itemIds: selectedItems.map(i => i.id), cities: Array.from(selectedCities), server, quality, cadence });
+          }}><Text style={styles.cadenceText}>{cadence}</Text></TouchableOpacity>
+        ))}</View>
+      </View>
+      {liveEnabled && <View><Text style={styles.liveStatus}>{t('liveTrackingOn')} · {liveStatus === 'new-data' ? t('newData') : liveStatus === 'no-new-data' ? t('noNewData') : liveStatus === 'no-data' ? t('liveNoData') : t('liveWaiting')} · {liveSeriesCount} {t('liveSeries')} · {livePollAt ? `${t('lastPoll')}: ${new Date(livePollAt).toLocaleTimeString()}` : ''}</Text>{liveError && <Text style={styles.liveError}>{liveSuspended ? t('rateLimitError') : `${t('liveRetrying')}: ${liveError}`}</Text>}</View>}
+
       {/* Fetch Button */}
       <TouchableOpacity
         style={styles.fetchBtn}
@@ -295,15 +307,13 @@ export default function HistoryScreen({ t, lang, server }: Props) {
             {selectedItems.map((i) => i.n).join(' vs ')}
           </Text>
           <Text style={styles.chartSubtitle}>
-            {lang === 'fr' ? 'Prix moyen (silver)' : 'Average price (silver)'}
-            {' \u2022 '}
+            {t('averagePriceSilver')}
+            {' • '}
             {periodLabels[PERIODS.find((p) => p.days === period)?.key || '30d']}
           </Text>
           {chartInfo.hasTruncatedSeries && (
             <Text style={styles.dataTimestamp}>
-              {lang === 'fr'
-                ? 'Certaines villes ont moins de donnees; le graphique montre seulement la periode commune.'
-                : 'Some cities have fewer data points; chart shows only the shared period.'}
+              {t('truncatedData')}
             </Text>
           )}
 
@@ -317,13 +327,15 @@ export default function HistoryScreen({ t, lang, server }: Props) {
             if (!latest) return null;
             return (
               <Text style={styles.dataTimestamp}>
-                {lang === 'fr' ? 'Dernières données' : 'Latest data'}: {formatDataAge(latest, lang)}
+                {t('latestData')}: {formatDataAge(latest, lang)}
               </Text>
             );
           })()}
 
           {/* Chart */}
+          {chartInfo.datasets.length > 0 ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View style={{ position: 'relative' }}>
             <LineChart
               data={{
                 labels: chartInfo.labels,
@@ -359,16 +371,32 @@ export default function HistoryScreen({ t, lang, server }: Props) {
               withVerticalLines={false}
               withHorizontalLabels
               withVerticalLabels
+              withDots={false}
+              withShadow={false}
               fromZero={false}
-              bezier
+              bezier={false}
               style={styles.chart}
             />
+            <Svg pointerEvents="none" width={chartInfo.projection.width} height={chartInfo.projection.height} style={{ position: 'absolute', left: 0, top: 0 }}>
+              {chartInfo.lineSegments.map((segment, index) => <SvgPolyline key={`solid-${index}`} points={segment.points.map((point) => { const xy = projectLiveChartPoint(point.timestamp, point.value, chartInfo.projection); return `${xy.x},${xy.y}`; }).join(' ')} fill="none" stroke={segment.color} strokeWidth="3" />)}
+              {liveDashedSegments.map((segment, index) => {
+                const from = projectLiveChartPoint(segment.from.timestamp, segment.from.value, chartInfo.projection);
+                const to = projectLiveChartPoint(segment.to.timestamp, segment.to.value, chartInfo.projection);
+                return <SvgLine key={`dashed-${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={CITY_COLORS[segment.city] || COLORS.primary} strokeWidth="3" strokeDasharray="8 5" />;
+              })}
+            </Svg>
+          </View>
           </ScrollView>
+          ) : (
+            <Text style={styles.dataTimestamp}>
+              {t('noCommonTimestamps')}
+            </Text>
+          )}
 
           {/* Legend — clear, one per line with color bar */}
           <View style={styles.legendContainer}>
             <Text style={styles.legendTitle}>
-              {lang === 'fr' ? 'L\u00e9gende' : 'Legend'}
+              {t('legend')}
             </Text>
             {chartInfo.legendEntries.map((entry, idx) => (
               <View key={idx} style={styles.legendRow}>
@@ -387,13 +415,13 @@ export default function HistoryScreen({ t, lang, server }: Props) {
           <View style={styles.statsTable}>
             <View style={styles.statsHeader}>
               <Text style={[styles.statsHeaderCell, { flex: 2 }]}>
-                {lang === 'fr' ? 'Ville' : 'City'}
+                {t('city')}
               </Text>
               <Text style={styles.statsHeaderCell}>Min</Text>
-              <Text style={styles.statsHeaderCell}>{lang === 'fr' ? 'Moy' : 'Avg'}</Text>
+              <Text style={styles.statsHeaderCell}>{t('average')}</Text>
               <Text style={styles.statsHeaderCell}>Max</Text>
               <Text style={styles.statsHeaderCell}>
-                {lang === 'fr' ? 'Actuel' : 'Current'}
+                {t('current')}
               </Text>
             </View>
             {chartInfo.legendEntries.map((entry, idx) => (
@@ -599,6 +627,17 @@ const styles = StyleSheet.create({
     color: COLORS.info,
     fontWeight: '700',
   },
+
+  liveRow: { flexDirection: 'row', alignItems: 'center', gap: SPACING.xs, marginBottom: SPACING.xs },
+  liveBtn: { flex: 1, paddingVertical: SPACING.sm, borderRadius: BORDER_RADIUS.sm, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.info },
+  liveBtnActive: { backgroundColor: COLORS.info + '30' },
+  liveBtnText: { color: COLORS.info, fontWeight: '700', textAlign: 'center', fontSize: FONT_SIZE.xs },
+  cadenceGroup: { flexDirection: 'row', gap: 3 },
+  cadenceBtn: { paddingHorizontal: SPACING.xs, paddingVertical: SPACING.sm, borderRadius: BORDER_RADIUS.sm, borderWidth: 1, borderColor: COLORS.border },
+  cadenceActive: { borderColor: COLORS.primary, backgroundColor: COLORS.primary + '25' },
+  cadenceText: { color: COLORS.textMuted, fontSize: FONT_SIZE.xs },
+  liveStatus: { color: COLORS.textMuted, fontSize: FONT_SIZE.xs, marginBottom: SPACING.sm },
+  liveError: { color: COLORS.loss, fontSize: FONT_SIZE.xs, marginBottom: SPACING.sm },
 
   fetchBtn: {
     backgroundColor: COLORS.primary,

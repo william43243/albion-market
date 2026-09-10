@@ -7,6 +7,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -49,23 +50,25 @@ class AlbionTools(private val serverBaseUrl: String, private val context: Contex
                     }
                 }
                 JSONObject().apply { put("results", results); put("hint", "Use the 'id' with get_prices") }.toString()
-            } catch (e: Exception) { """{"error":"${e.message}"}""" }
+            } catch (e: Exception) { JSONObject().put("error", e.message ?: "tool error").toString() }
         }
     }
 
     val getPricesTool = object : OpenApiTool {
         override fun getToolDescriptionJsonString(): String = """
-        {"name":"get_prices","description":"Get current market prices for an Albion item across all cities.","parameters":{"type":"object","properties":{"item_id":{"type":"string","description":"Item ID e.g. T4_ROCK"}},"required":["item_id"]}}
+        {"name":"get_prices","description":"Get current market prices for an Albion item across all cities.","parameters":{"type":"object","properties":{"item_id":{"type":"string","description":"Item ID e.g. T4_ROCK"},"quality":{"type":"integer","description":"Quality 1 to 5"}},"required":["item_id","quality"]}}
         """.trimIndent()
         override fun execute(paramsJsonString: String): String {
             return try {
                 val itemId = JSONObject(paramsJsonString).getString("item_id")
+                val quality = JSONObject(paramsJsonString).getInt("quality").coerceIn(1, 5)
                 val cities = "Caerleon,Bridgewatch,Fort Sterling,Lymhurst,Thetford,Martlock,Brecilien"
-                val response = httpGet("$serverBaseUrl/prices/$itemId.json?locations=$cities")
+                val response = httpGet("$serverBaseUrl/prices/${encodePath(itemId)}.json?locations=${encodeQuery(cities)}&qualities=$quality")
                 val prices = JSONArray(response)
                 val result = JSONObject(); val cityPrices = JSONArray()
                 for (i in 0 until prices.length()) {
                     val p = prices.getJSONObject(i)
+                    if (p.optInt("quality", 1) != quality) continue
                     val sellMin = p.optInt("sell_price_min", 0); val buyMax = p.optInt("buy_price_max", 0)
                     if (sellMin == 0 && buyMax == 0) continue
                     cityPrices.put(JSONObject().apply {
@@ -75,25 +78,25 @@ class AlbionTools(private val serverBaseUrl: String, private val context: Contex
                     })
                 }
                 result.put("item", itemId); result.put("prices", cityPrices); result.toString()
-            } catch (e: Exception) { """{"error":"${e.message}"}""" }
+            } catch (e: Exception) { JSONObject().put("error", e.message ?: "tool error").toString() }
         }
     }
 
     val getHistoryTool = object : OpenApiTool {
         override fun getToolDescriptionJsonString(): String = """
-        {"name":"get_history","description":"Get price history for an Albion item.","parameters":{"type":"object","properties":{"item_id":{"type":"string","description":"Item ID"},"days":{"type":"integer","description":"Days of history (7,30,90)"}},"required":["item_id","days"]}}
+        {"name":"get_history","description":"Get price history for an Albion item.","parameters":{"type":"object","properties":{"item_id":{"type":"string","description":"Item ID"},"quality":{"type":"integer","description":"Quality 1 to 5"},"days":{"type":"integer","description":"Days of history (7,30,90)"}},"required":["item_id","quality","days"]}}
         """.trimIndent()
         override fun execute(paramsJsonString: String): String {
             return try {
                 val params = JSONObject(paramsJsonString)
-                val itemId = params.getString("item_id"); val days = params.optInt("days", 7)
+                val itemId = params.getString("item_id"); val quality = params.getInt("quality").coerceIn(1, 5); val days = params.optInt("days", 7)
                 val cities = "Caerleon,Bridgewatch,Fort Sterling,Lymhurst,Thetford,Martlock,Brecilien"
                 val cal = Calendar.getInstance(); val endDate = formatApiDate(cal)
                 cal.add(Calendar.DAY_OF_YEAR, -days); val startDate = formatApiDate(cal)
-                val response = httpGet("$serverBaseUrl/history/$itemId.json?locations=$cities&date=$startDate&end_date=$endDate&time-scale=24")
+                val response = httpGet("$serverBaseUrl/history/${encodePath(itemId)}.json?locations=${encodeQuery(cities)}&date=${encodeQuery(startDate)}&end_date=${encodeQuery(endDate)}&time-scale=24&qualities=$quality")
                 val history = JSONArray(response); val citySummaries = JSONArray()
                 for (i in 0 until history.length()) {
-                    val h = history.getJSONObject(i); val data = h.getJSONArray("data")
+                    val h = history.getJSONObject(i); if (h.optInt("quality", 1) != quality) continue; val data = h.getJSONArray("data")
                     if (data.length() == 0) continue
                     var sum = 0L; var count = 0; var totalVol = 0L; var min = Long.MAX_VALUE; var max = 0L
                     for (j in 0 until data.length()) {
@@ -109,7 +112,7 @@ class AlbionTools(private val serverBaseUrl: String, private val context: Contex
                     })
                 }
                 JSONObject().apply { put("item", itemId); put("period", "${days}d"); put("cities", citySummaries) }.toString()
-            } catch (e: Exception) { """{"error":"${e.message}"}""" }
+            } catch (e: Exception) { JSONObject().put("error", e.message ?: "tool error").toString() }
         }
     }
 
@@ -133,9 +136,9 @@ class AlbionTools(private val serverBaseUrl: String, private val context: Contex
             val params = JSONObject(paramsJsonString)
             val from = params.getString("city_from"); val to = params.getString("city_to")
             if (from.contains("Brecilien") || to.contains("Brecilien"))
-                return """{"from":"$from","to":"$to","info":"Avalon Roads only, no safe overland route"}"""
+                return JSONObject().apply { put("from", from); put("to", to); put("info", "Avalon Roads only, no safe overland route") }.toString()
             val route = ROUTES.find { (it.from == from && it.to == to) || (it.from == to && it.to == from) }
-                ?: return """{"from":"$from","to":"$to","error":"Route not found"}"""
+                ?: return JSONObject().apply { put("from", from); put("to", to); put("error", "Route not found") }.toString()
             return JSONObject().apply {
                 put("from", from); put("to", to); put("zones", route.zones)
                 put("red_zones", route.red); put("safe", route.red == 0); put("note", route.note)
@@ -149,9 +152,15 @@ class AlbionTools(private val serverBaseUrl: String, private val context: Contex
         val conn = URL(urlStr).openConnection() as HttpURLConnection
         conn.connectTimeout = CONNECT_TIMEOUT; conn.readTimeout = READ_TIMEOUT
         conn.setRequestProperty("User-Agent", "AlbionMarket/1.0")
-        return try { conn.inputStream.bufferedReader().readText() } finally { conn.disconnect() }
+        return try {
+            val status = conn.responseCode
+            if (status !in 200..299) throw IllegalStateException("AODP HTTP $status")
+            conn.inputStream.bufferedReader().readText()
+        } finally { conn.disconnect() }
     }
 
+    private fun encodeQuery(value: String): String = URLEncoder.encode(value, "UTF-8")
+    private fun encodePath(value: String): String = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
     private fun formatApiDate(cal: Calendar) = "${cal.get(Calendar.MONTH)+1}-${cal.get(Calendar.DAY_OF_MONTH)}-${cal.get(Calendar.YEAR)}"
 
     data class R(val from: String, val to: String, val zones: Int, val red: Int, val note: String)

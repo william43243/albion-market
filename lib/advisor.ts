@@ -11,6 +11,7 @@ import {
   Server,
   PriceData,
   HistoryResponse,
+  Quality,
 } from './api';
 import { AlbionItem } from './items';
 import { Language } from './i18n';
@@ -21,6 +22,7 @@ export interface MarketContext {
   prices: PriceData[];
   history7d: HistoryResponse[];
   history30d: HistoryResponse[];
+  quality: Quality;
 }
 
 function formatServerName(server?: string): string {
@@ -77,7 +79,12 @@ export function buildSystemPrompt(lang: Language, server?: string): string {
 
   const common = `
 Hard rules:
-- Use ONLY the market data in the prompt. Do not invent prices, cities, volumes, fees, or server data.
+- Use ONLY the market data returned by the tools or included in the prompt. Do not invent prices, cities, volumes, fees, or server data.
+- On Android LiteRT, available tools in this conversation are: search_item, get_prices, get_history, get_route, get_time. Call them before answering a live market request.
+- On WebLLM, tool calling is unavailable: never claim that you called a tool or have live data; answer only from the market context supplied by the app and say when it is missing.
+- When a native Android user asks about an item, tier, city, price, volume, history, flip, or route, call the relevant tools before answering. Never claim that you lack API access unless a tool actually failed.
+- For a native item market request: call search_item first, then get_prices and get_history (7 days); use get_route when comparing cities.
+- If a city is named, filter the returned data to that city and clearly state when the API has no observation there.
 - The active server is ${serverInfo}. Never mix data from another server.
 - The code precomputes taxes, fees, direct flip profit, order-scenario profit, freshness, and liquidity. Do not recalculate them; quote them and reason from them.
 - If data is stale, missing, low-volume, or the route is risky, lower confidence and prefer WATCH/SKIP.
@@ -136,24 +143,30 @@ No inventes ningun numero ausente. Si faltan datos, elige VIGILAR o EVITAR. Resp
  */
 export async function fetchMarketContext(
   item: AlbionItem,
-  server: Server
+  server: Server,
+  quality: Quality = 1
 ): Promise<MarketContext> {
   const cities = [...CITIES] as City[];
 
   const [prices, history7d, history30d] = await Promise.all([
-    fetchCurrentPrices(item.id, cities, server),
-    fetchPriceHistory(item.id, cities, formatDateForApi(daysAgo(7)), formatDateForApi(new Date()), 24, server),
-    fetchPriceHistory(item.id, cities, formatDateForApi(daysAgo(30)), formatDateForApi(new Date()), 24, server),
+    fetchCurrentPrices(item.id, cities, server, quality),
+    fetchPriceHistory(item.id, cities, formatDateForApi(daysAgo(7)), formatDateForApi(new Date()), 24, server, quality),
+    fetchPriceHistory(item.id, cities, formatDateForApi(daysAgo(30)), formatDateForApi(new Date()), 24, server, quality),
   ]);
 
-  return { item, prices, history7d, history30d };
+  return { item, prices, history7d, history30d, quality };
 }
 
 /**
  * Pre-compute the best buy/sell/flip from data so the LLM just confirms/comments.
  * This reduces hallucination risk — we give the LLM the answer and ask it to advise.
  */
-export function buildAnalysisPrompt(ctx: MarketContext, lang: Language, isPremium: boolean): string {
+export function buildAnalysisPrompt(
+  ctx: MarketContext,
+  lang: Language,
+  isPremium: boolean,
+  playerCity: City | null = null
+): string {
   const { item, prices, history7d } = ctx;
   const serverMode = 'server already selected by app/API layer';
   const taxRate = isPremium ? 0.04 : 0.08;
@@ -253,6 +266,8 @@ export function buildAnalysisPrompt(ctx: MarketContext, lang: Language, isPremiu
 
   return `AI_DECISION_INPUT
 Server mode: ${serverMode}
+Quality: ${ctx.quality} (never mix with enchantment/tier)
+Player current city: ${playerCity || 'unknown — do not assume location'}
 Tax mode: ${taxMode}
 Precomputed values below. Do not recalculate; use them for verdict only.
 Verdict rules: BUY only if direct profit is clearly positive, data freshness is not stale, liquidity is medium/high, and route risk is acceptable. WATCH if data is stale/low-volume or spread is thin. SKIP if profit is negative after taxes/fees or route/liquidity risk dominates.
@@ -281,7 +296,8 @@ ${tpl.opinion}`;
 export function buildQuestionPrompt(
   question: string,
   ctx: MarketContext | null,
-  lang: Language
+  lang: Language,
+  playerCity: City | null = null
 ): string {
   if (!ctx) return question;
 
@@ -290,7 +306,11 @@ export function buildQuestionPrompt(
   const validBuy = ctx.prices.filter((p) => p.buy_price_max > 0);
   const trendStats = getTrendStats(ctx.history7d);
 
-  const lines: string[] = [`Current context: ${ctx.item.n}`, 'Known prices:'];
+  const lines: string[] = [
+    `Player current city: ${playerCity || 'unknown — do not assume location'}`,
+    `Current context: ${ctx.item.n}`,
+    'Known prices:',
+  ];
   if (validSell.length > 0) {
     const top3 = [...validSell].sort((a, b) => a.sell_price_min - b.sell_price_min).slice(0, 3);
     lines.push('Lowest sell: ' + top3.map((p) => `${p.city}=${p.sell_price_min} freshness=${getFreshnessLabel(p.sell_price_min_date)}`).join(', '));

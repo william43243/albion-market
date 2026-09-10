@@ -13,7 +13,8 @@ import {
 } from 'react-native';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS } from '../constants/theme';
 import { Language } from '../lib/i18n';
-import { Server } from '../lib/api';
+import { Server, City } from '../lib/api';
+import { parseMarketQuery } from '../lib/marketQuery';
 import { AlbionItem } from '../lib/items';
 import ItemPicker from '../components/ItemPicker';
 import {
@@ -28,11 +29,14 @@ import * as LLM from '../lib/llm';
 import * as ImagePicker from 'expo-image-picker';
 import { AVAILABLE_MODELS, ModelInfo, formatBytes, getModelsForPlatform, getModelFilename, getModelSizeLabel } from '../lib/models';
 import { trackAIPrompt, trackAIModelDownload, trackAIModelStart, trackAIImageSent } from '../lib/analytics';
+import { shouldCancelDownload } from '../lib/downloadLifecycle';
 
 interface Props {
   t: (key: any) => any;
   lang: Language;
   server: Server;
+  playerCity: City | null;
+  onCityDetected?: (city: City) => Promise<void>;
   isPremium: boolean;
 }
 
@@ -51,7 +55,7 @@ interface DownloadState {
   totalBytes: number;
 }
 
-export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
+export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetected, isPremium }: Props) {
   const [screen, setScreen] = useState<Screen>('models');
   const [engineState, setEngineState] = useState<EngineState>('idle');
   const [downloadedFilenames, setDownloadedFilenames] = useState<Set<string>>(new Set());
@@ -78,6 +82,7 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
   const cleanupRef = useRef<(() => void) | null>(null);
   const cancelDownloadRef = useRef<(() => void) | null>(null);
   const previousServerRef = useRef<Server>(server);
+  const resetInFlightRef = useRef<Promise<boolean> | null>(null);
 
   // ~4 chars per token is a rough estimate for English/French
   const MAX_TOKENS = 4096;
@@ -86,6 +91,14 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
   const RESET_THRESHOLD = MAX_TOKENS * 0.90;   // auto-reset at 90%
 
   const estimateTokens = (text: string): number => Math.ceil(text.length / 4);
+
+  const resetNativeConversation = useCallback(async (): Promise<boolean> => {
+    if (resetInFlightRef.current) return resetInFlightRef.current;
+    const pending = LLM.resetConversation(buildSystemPrompt(lang, server))
+      .finally(() => { resetInFlightRef.current = null; });
+    resetInFlightRef.current = pending;
+    return pending;
+  }, [lang, server]);
 
   // Load downloaded models on mount + refresh when app comes back to foreground
   useEffect(() => {
@@ -189,7 +202,7 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
   );
 
   const handleCancelDownload = useCallback(() => {
-    cancelDownloadRef.current?.();
+    if (shouldCancelDownload('explicit-cancel')) cancelDownloadRef.current?.();
     setDownloading(null);
   }, []);
 
@@ -231,7 +244,7 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
         const systemPrompt = buildSystemPrompt(lang, server);
         const serverUrl = SERVERS[server];
         const filename = getModelFilename(model, Platform.OS);
-        const initResult = await LLM.initialize(filename, systemPrompt, serverUrl);
+        const initResult = await LLM.initialize(filename, systemPrompt, serverUrl, model.multimodal === true);
         setBackendInfo(
           typeof initResult === 'object' && initResult !== null
             ? { backendUsed: initResult.backendUsed, isMediaTek: initResult.isMediaTek }
@@ -259,7 +272,7 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
 
   const sendToLLM = useCallback(
     (prompt: string, userDisplay?: string) => {
-      if (streaming) return;
+      if (streaming || resetInFlightRef.current) return;
 
       // Track tokens for the prompt sent
       const promptTokens = estimateTokens(prompt);
@@ -299,7 +312,7 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
             });
 
             // Reset conversation on native side, keep messages in UI for reference
-            LLM.resetConversation(buildSystemPrompt(lang, server)).catch(() => {});
+            void resetNativeConversation();
             setTokenCount(SYSTEM_PROMPT_TOKENS);
           }
           // Warning at 75%
@@ -328,10 +341,10 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
         },
       });
     },
-    [streaming, tokenCount, lang, server, activeModelId]
+    [streaming, tokenCount, lang, server, activeModelId, resetNativeConversation]
   );
   const handleItemSelect = useCallback(
-    async (item: AlbionItem) => {
+    async (item: AlbionItem, analysisCity: City | null = playerCity) => {
       setSelectedItem(item);
       setShowItemPicker(false);
       setFetchingData(true);
@@ -340,7 +353,7 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
         const ctx = await fetchMarketContext(item, server);
         setMarketCtx(ctx);
         if (engineState === 'ready') {
-          const prompt = buildAnalysisPrompt(ctx, lang, isPremium);
+          const prompt = buildAnalysisPrompt(ctx, lang, isPremium, analysisCity);
           sendToLLM(prompt, `${t('advisorAnalyzing')} ${item.n}...`);
         }
       } catch (e: any) {
@@ -348,24 +361,36 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
       }
       setFetchingData(false);
     },
-    [server, engineState, lang, t, isPremium, sendToLLM]
+    [server, engineState, lang, t, isPremium, playerCity, sendToLLM]
   );
 
 
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const text = input.trim();
+    if (resetInFlightRef.current) {
+      try { await resetInFlightRef.current; } catch { return; }
+    }
     if (!text || streaming || engineState !== 'ready') return;
     setInput('');
-    const prompt = buildQuestionPrompt(text, marketCtx, lang);
+
+    // Fast path: "item T4, city" and "city item T4" launch market analysis directly.
+    const parsed = parseMarketQuery(text);
+    if (parsed.city && onCityDetected) await onCityDetected(parsed.city);
+    if (parsed.item) {
+      await handleItemSelect(parsed.item, parsed.city || playerCity);
+      return;
+    }
+
+    const prompt = buildQuestionPrompt(text, marketCtx, lang, parsed.city || playerCity);
     sendToLLM(prompt, text);
-  }, [input, streaming, engineState, marketCtx, lang, sendToLLM]);
+  }, [input, streaming, engineState, marketCtx, lang, playerCity, onCityDetected, handleItemSelect, sendToLLM]);
 
   // ─── Image / Vision ──────────────────────────────────────────
 
   const sendImageToLLM = useCallback(
     (imageUri: string) => {
-      if (streaming) return;
+      if (streaming || resetInFlightRef.current) return;
 
       const prompt = input.trim() || (lang === 'fr' ? 'Décris cette image.' : 'Describe this image.');
       setInput('');
@@ -407,7 +432,7 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
                 ? `Context plein (${Math.round(newTotal)}/${MAX_TOKENS} tokens). Reset auto.`
                 : `Context full (${Math.round(newTotal)}/${MAX_TOKENS} tokens). Auto-reset.`,
             });
-            LLM.resetConversation(buildSystemPrompt(lang, server)).catch(() => {});
+            void resetNativeConversation();
             setTokenCount(SYSTEM_PROMPT_TOKENS);
           }
 
@@ -470,9 +495,9 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
     setSelectedItem(null);
     setTokenCount(SYSTEM_PROMPT_TOKENS);
     try {
-      await LLM.resetConversation(buildSystemPrompt(lang, server));
+      await resetNativeConversation();
     } catch {}
-  }, [lang, server]);
+  }, [resetNativeConversation]);
 
   useEffect(() => {
     if (engineState !== 'ready' || previousServerRef.current === server) return;
@@ -481,9 +506,7 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
     setStreaming(false);
     setStreamBuffer('');
     setTokenCount(SYSTEM_PROMPT_TOKENS);
-    LLM.resetConversation(buildSystemPrompt(lang, server)).catch((err) => {
-      if (__DEV__) console.warn('[advisor] failed to reset server context', err);
-    });
+    void resetNativeConversation();
     setMessages((prev) => [
       ...prev,
       {
@@ -493,7 +516,7 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
           : `Server changed: ${server}. AI context updated.`,
       },
     ]);
-  }, [server, lang, engineState]);
+  }, [server, lang, engineState, resetNativeConversation]);
 
   const handleBackToModels = useCallback(async () => {
     cleanupRef.current?.();
@@ -511,7 +534,8 @@ export default function AdvisorScreen({ t, lang, server, isPremium }: Props) {
   useEffect(() => {
     return () => {
       cleanupRef.current?.();
-      cancelDownloadRef.current?.();
+      // DownloadManager owns the transfer and continues it across navigation.
+      // Cancellation is reserved for the explicit Cancel button above.
     };
   }, []);
 
