@@ -244,7 +244,13 @@ export default function AdvisorScreen({ t, lang, server, playerCity, onCityDetec
         const systemPrompt = buildSystemPrompt(lang, server);
         const serverUrl = SERVERS[server];
         const filename = getModelFilename(model, Platform.OS);
-        const initResult = await LLM.initialize(filename, systemPrompt, serverUrl, model.multimodal === true);
+        const initResult = await LLM.initialize(
+          filename,
+          systemPrompt,
+          serverUrl,
+          model.multimodal === true,
+          model.toolCalling === true
+        );
         setBackendInfo(
           typeof initResult === 'object' && initResult !== null
             ? { backendUsed: initResult.backendUsed, isMediaTek: initResult.isMediaTek }

@@ -9,6 +9,7 @@ import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.text.ParsePosition
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -108,10 +109,15 @@ class AlbionTools(private val serverBaseUrl: String, private val context: Contex
                 for (i in 0 until prices.length()) {
                     val p = prices.getJSONObject(i)
                     if (p.optInt("quality", 1) != quality) continue
-                    val sellMin = p.optInt("sell_price_min", 0); val buyMax = p.optInt("buy_price_max", 0)
-                    if (sellMin == 0 && buyMax == 0) continue
+                    val city = p.optString("city")
+                    require(city.isNotEmpty() && seen.add(city)) { "Invalid or duplicate city" }
+                    val sellMin = p.optLong("sell_price_min", 0); val buyMax = p.optLong("buy_price_max", 0)
+                    require(sellMin in 0..Int.MAX_VALUE && buyMax in 0..Int.MAX_VALUE) { "Invalid price" }
+                    if (sellMin == 0L && buyMax == 0L) continue
+                    val sellDate = if (sellMin > 0) p.getString("sell_price_min_date").also { parseAodpTimestamp(it) } else ""
+                    val buyDate = if (buyMax > 0) p.getString("buy_price_max_date").also { parseAodpTimestamp(it) } else ""
                     cityPrices.put(JSONObject().apply {
-                        put("city", city); put("quality", 1)
+                        put("city", city); put("quality", quality)
                         if (sellMin > 0) { put("sell", sellMin); put("sell_date", sellDate) }
                         if (buyMax > 0) { put("buy", buyMax); put("buy_date", buyDate) }
                     })
@@ -153,7 +159,7 @@ class AlbionTools(private val serverBaseUrl: String, private val context: Contex
                     if (count == 0) continue
                     val weightedAverage = if (totalVol > 0) weightedSum / totalVol else min + (max - min) / 2
                     citySummaries.put(JSONObject().apply {
-                        put("city", city); put("quality", 1); put("avg", weightedAverage)
+                        put("city", h.optString("location")); put("quality", quality); put("avg", weightedAverage)
                         put("min", min); put("max", max); put("last", lastPrice); put("volume", totalVol)
                     })
                 }

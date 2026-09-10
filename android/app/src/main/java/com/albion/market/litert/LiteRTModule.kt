@@ -40,7 +40,9 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
     private var conversation: Conversation? = null
     private var currentModelId: String? = null
     private var currentServerBaseUrl: String? = null
+    private var currentSupportsTools: Boolean = false
     private var hasVision: Boolean = false
+    @Volatile private var activeInferenceRequestId: String? = null
     private var backendUsed: String = "unknown"
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val conversationMutex = Mutex()
@@ -240,7 +242,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
     // ─── Engine Lifecycle ────────────────────────────────────────
 
     @ReactMethod
-    fun initialize(modelFilename: String, systemPrompt: String, serverBaseUrl: String, enableVision: Boolean, promise: Promise) {
+    fun initialize(modelFilename: String, systemPrompt: String, serverBaseUrl: String, supportsVision: Boolean, supportsTools: Boolean, promise: Promise) {
         scope.launch {
             try {
                 val modelFile = findModelFile(modelFilename)
@@ -275,7 +277,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
                         val config = EngineConfig(
                             modelPath = modelFile.absolutePath,
                             backend = gpuBackend,
-                            visionBackend = if (enableVision) gpuBackend else null,
+                            visionBackend = if (supportsVision) gpuBackend else null,
                             cacheDir = reactContext.cacheDir.path
                         )
                         newEngine = Engine(config).also { it.initialize() }
@@ -392,12 +394,14 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
             val released = AtomicBoolean(false)
             try {
                 val conv = conversation ?: throw IllegalStateException("Engine not initialized.")
+                activeInferenceRequestId = requestId
                 val callback = createStreamCallback(requestId) {
                     if (released.compareAndSet(false, true)) conversationMutex.unlock()
                 }
                 conv.sendMessageAsync(userMessage, callback)
                 promise.resolve(true)
             } catch (e: Exception) {
+                if (activeInferenceRequestId == requestId) activeInferenceRequestId = null
                 if (released.compareAndSet(false, true)) conversationMutex.unlock()
                 Log.e(TAG, "sendMessage failed", e)
                 promise.reject("SEND_ERROR", e.message, e)
@@ -411,12 +415,12 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
             promise.reject("NO_VISION", "This model does not support images. Use a multimodal model (Qwen3.5).")
             return
         }
-        activeInferenceRequestId = requestId
         scope.launch {
             conversationMutex.lock()
             val released = AtomicBoolean(false)
             try {
                 val conv = conversation ?: throw IllegalStateException("Engine not initialized.")
+                activeInferenceRequestId = requestId
                 val imageFile = File(imagePath)
                 if (!imageFile.exists()) throw IllegalArgumentException("Image not found: $imagePath")
                 val callback = createStreamCallback(requestId) {
@@ -426,6 +430,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
                 conv.sendMessageAsync(content, callback)
                 promise.resolve(true)
             } catch (e: Exception) {
+                if (activeInferenceRequestId == requestId) activeInferenceRequestId = null
                 if (released.compareAndSet(false, true)) conversationMutex.unlock()
                 Log.e(TAG, "sendMessageWithImage failed", e)
                 promise.reject("SEND_ERROR", e.message, e)
@@ -459,9 +464,13 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
             conversationMutex.withLock {
                 try {
                     conversation?.close()
-                    val resetTools = currentServerBaseUrl
-                        ?.let { AlbionTools(it, reactContext).allTools().map { apiTool -> tool(apiTool) } }
-                        ?: emptyList()
+                    val resetTools = if (currentSupportsTools) {
+                        currentServerBaseUrl
+                            ?.let { AlbionTools(it, reactContext).allTools().map { apiTool -> tool(apiTool) } }
+                            ?: emptyList()
+                    } else {
+                        emptyList()
+                    }
                     val convConfig = ConversationConfig(
                         systemInstruction = Contents.of(systemPrompt),
                         samplerConfig = SamplerConfig(topK = 20, topP = 0.9, temperature = 0.3),
@@ -480,7 +489,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
             try {
                 conversation?.close(); conversation = null
                 engine?.close(); engine = null
-                currentModelId = null; currentServerBaseUrl = null; hasVision = false
+                currentModelId = null; currentServerBaseUrl = null; currentSupportsTools = false; activeInferenceRequestId = null; hasVision = false
                 promise.resolve(true)
             } catch (e: Exception) { promise.reject("DESTROY_ERROR", e.message, e) }
         }
@@ -490,7 +499,12 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
 
     private fun createStreamCallback(requestId: String, onFinished: () -> Unit = {}) = object : MessageCallback {
         private val finished = AtomicBoolean(false)
-        private fun finishOnce() { if (finished.compareAndSet(false, true)) onFinished() }
+        private fun finishOnce() {
+            if (finished.compareAndSet(false, true)) {
+                if (activeInferenceRequestId == requestId) activeInferenceRequestId = null
+                onFinished()
+            }
+        }
         override fun onMessage(message: Message) {
             sendEvent("onLiteRTToken", Arguments.createMap().apply {
                 putString("requestId", requestId); putString("token", message.toString())
