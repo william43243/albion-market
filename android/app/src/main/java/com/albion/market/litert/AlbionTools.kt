@@ -112,7 +112,7 @@ class AlbionTools(private val serverBaseUrl: String, private val context: Contex
                     val city = p.optString("city")
                     require(city.isNotEmpty() && seen.add(city)) { "Invalid or duplicate city" }
                     val sellMin = p.optLong("sell_price_min", 0); val buyMax = p.optLong("buy_price_max", 0)
-                    require(sellMin in 0..Int.MAX_VALUE && buyMax in 0..Int.MAX_VALUE) { "Invalid price" }
+                    require(sellMin in 0L..Int.MAX_VALUE.toLong() && buyMax in 0L..Int.MAX_VALUE.toLong()) { "Invalid price" }
                     if (sellMin == 0L && buyMax == 0L) continue
                     val sellDate = if (sellMin > 0) p.getString("sell_price_min_date").also { parseAodpTimestamp(it) } else ""
                     val buyDate = if (buyMax > 0) p.getString("buy_price_max_date").also { parseAodpTimestamp(it) } else ""
@@ -148,7 +148,7 @@ class AlbionTools(private val serverBaseUrl: String, private val context: Contex
                     for (j in 0 until data.length()) {
                         val d = data.getJSONObject(j); val avg = d.getLong("avg_price"); val volume = d.getLong("item_count")
                         val timestampMillis = parseAodpTimestamp(d.getString("timestamp"))
-                        require(avg in 0..Int.MAX_VALUE && volume in 0..Int.MAX_VALUE && seenTimes.add(timestampMillis)) { "Invalid history point" }
+                        require(avg in 0L..Int.MAX_VALUE.toLong() && volume in 0L..Int.MAX_VALUE.toLong() && seenTimes.add(timestampMillis)) { "Invalid history point" }
                         if (avg <= 0) continue
                         weightedSum = Math.addExact(weightedSum, Math.multiplyExact(avg, volume))
                         totalVol = Math.addExact(totalVol, volume)

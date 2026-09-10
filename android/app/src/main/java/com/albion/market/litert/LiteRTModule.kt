@@ -389,12 +389,12 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun sendMessage(userMessage: String, requestId: String, promise: Promise) {
+        activeInferenceRequestId = requestId
         scope.launch {
             conversationMutex.lock()
             val released = AtomicBoolean(false)
             try {
                 val conv = conversation ?: throw IllegalStateException("Engine not initialized.")
-                activeInferenceRequestId = requestId
                 val callback = createStreamCallback(requestId) {
                     if (released.compareAndSet(false, true)) conversationMutex.unlock()
                 }
@@ -415,12 +415,12 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
             promise.reject("NO_VISION", "This model does not support images. Use a multimodal model (Qwen3.5).")
             return
         }
+        activeInferenceRequestId = requestId
         scope.launch {
             conversationMutex.lock()
             val released = AtomicBoolean(false)
             try {
                 val conv = conversation ?: throw IllegalStateException("Engine not initialized.")
-                activeInferenceRequestId = requestId
                 val imageFile = File(imagePath)
                 if (!imageFile.exists()) throw IllegalArgumentException("Image not found: $imagePath")
                 val callback = createStreamCallback(requestId) {
@@ -464,10 +464,15 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
             conversationMutex.withLock {
                 try {
                     conversation?.close()
+                    val resetServerBaseUrl = serverBaseUrl.also {
+                        require(it in setOf(
+                            "https://west.albion-online-data.com/api/v2/stats",
+                            "https://europe.albion-online-data.com/api/v2/stats",
+                            "https://east.albion-online-data.com/api/v2/stats",
+                        )) { "Unsupported Albion server" }
+                    }
                     val resetTools = if (currentSupportsTools) {
-                        currentServerBaseUrl
-                            ?.let { AlbionTools(it, reactContext).allTools().map { apiTool -> tool(apiTool) } }
-                            ?: emptyList()
+                        AlbionTools(resetServerBaseUrl, reactContext).allTools().map { apiTool -> tool(apiTool) }
                     } else {
                         emptyList()
                     }
@@ -477,6 +482,7 @@ class LiteRTModule(private val reactContext: ReactApplicationContext) :
                         tools = resetTools
                     )
                     conversation = eng.createConversation(convConfig)
+                    currentServerBaseUrl = resetServerBaseUrl
                     promise.resolve(true)
                 } catch (e: Exception) { promise.reject("RESET_ERROR", e.message, e) }
             }
