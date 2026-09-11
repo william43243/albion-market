@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { alignHistoryByTimestamp, historyActivity, weightedAverage } from '../lib/aodpTime';
+import { formatDataAge } from '../lib/api';
 import { parseUserNumber } from '../lib/numberParsing';
 
 test('parses French decimal and keeps ambiguous integer invalid', () => {
@@ -17,4 +18,12 @@ test('aligns sparse history by timestamp without zeros or repeated values', () =
   assert.deepEqual(aligned.series['T4:Caerleon:q1'], [10, null, 30]);
   assert.equal(weightedAverage(a.data), (10 * 2 + 30) / 3);
   assert.equal(historyActivity({ ...a, data: [] }).status, 'unknown');
+});
+
+test('formats changing data age from an injected current time', () => {
+  const timestamp = '2026-09-09T00:00:00Z';
+  const dayAfter = Date.parse('2026-09-10T00:00:00Z');
+  const twoDaysAfter = Date.parse('2026-09-11T00:00:00Z');
+  assert.equal(formatDataAge(timestamp, 'fr', dayAfter), '1d (9/9 00:00)');
+  assert.equal(formatDataAge(timestamp, 'fr', twoDaysAfter), '2d (9/9 00:00)');
 });

@@ -80,12 +80,17 @@ export default function HistoryScreen({ t, lang, server }: Props) {
   const [liveError, setLiveError] = useState<string | undefined>();
   const [liveSuspended, setLiveSuspended] = useState(false);
   const [liveDashedSegments, setLiveDashedSegments] = useState<import('../lib/liveChart').LiveChartSegment[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const liveController = useRef(createLiveTrackingController({
     fetchPrices: (config) => fetchCurrentPricesLiveBatch(config.itemIds, config.cities, config.server, config.quality),
     onUpdate: (snapshot) => { setLivePoints(snapshot.points); setLiveSeriesCount(snapshot.seriesCount); setLiveDashedSegments(snapshot.dashedSegments); setLiveStatus(snapshot.status); setLivePollAt(snapshot.lastPollAt); setLiveError(snapshot.error?.message); setLiveSuspended(snapshot.state === 'suspended'); },
   }));
   const liveConfigKey = `${selectedItems.map(i => i.id).join(',')}|${[...selectedCities].join(',')}|${server}|${quality}`;
   useEffect(() => () => liveController.current.stop(), []);
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
   useEffect(() => { if (liveEnabled) { liveController.current.stop(); setLiveEnabled(false); setLiveSuspended(false); setLivePoints([]); } }, [liveConfigKey]);
   const [historyData, setHistoryData] = useState<HistoryResponse[]>([]);
   const [loading, setLoading] = useState(false);
@@ -327,7 +332,7 @@ export default function HistoryScreen({ t, lang, server }: Props) {
             if (!latest) return null;
             return (
               <Text style={styles.dataTimestamp}>
-                {t('latestData')}: {formatDataAge(latest, lang)}
+                {t('latestData')}: {formatDataAge(latest, lang, nowMs)}
               </Text>
             );
           })()}

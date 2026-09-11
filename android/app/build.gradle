@@ -93,8 +93,8 @@ android {
         applicationId 'com.albion.market'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 14
-        versionName "2.0.704"
+        versionCode 15
+        versionName "2.0.8-beta.5.9"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -186,7 +186,7 @@ dependencies {
     implementation("com.facebook.react:react-android")
 
     // LiteRT-LM — on-device LLM inference with GPU acceleration
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.1")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.17.0")
     // Coroutines for async inference
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 

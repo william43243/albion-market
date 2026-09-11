@@ -146,10 +146,10 @@ export async function fetchPriceHistory(itemId: string, cities: City[] = [...CIT
 
 export function formatDateForApi(date: Date): string { return `${date.getMonth() + 1}-${date.getDate()}-${date.getFullYear()}`; }
 export function daysAgo(days: number): Date { const d = new Date(); d.setDate(d.getDate() - days); return d; }
-export function formatDataAge(dateStr: string, lang: string = 'en'): string {
+export function formatDataAge(dateStr: string, lang: string = 'en', nowMs: number = Date.now()): string {
   if (!dateStr || dateStr === '0001-01-01T00:00:00') return lang === 'fr' ? 'inconnue' : lang === 'es' ? 'desconocida' : 'unknown';
   const date = new Date(dateStr); if (Number.isNaN(date.getTime())) return '?';
-  const mins = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
+  const mins = Math.max(0, Math.floor((nowMs - date.getTime()) / 60000));
   const relative = mins < 1 ? '<1min' : mins < 60 ? `${mins}min` : mins < 1440 ? `${Math.floor(mins / 60)}h` : `${Math.floor(mins / 1440)}d`;
   return `${relative} (${date.getDate()}/${date.getMonth() + 1} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')})`;
 }
